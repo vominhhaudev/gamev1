@@ -12,23 +12,21 @@ use axum::{
 };
 use once_cell::sync::Lazy;
 use prometheus::{
-    register_int_counter, register_int_counter_vec, register_int_gauge, Encoder, IntCounter,
-    IntCounterVec, IntGauge, TextEncoder,
+    register_int_counter_vec, Encoder, IntCounterVec, TextEncoder,
 };
 use tracing::error;
 
-use common_net::message::{self, Channel, ControlMessage, Frame, FramePayload, StateMessage};
+use common_net::message::{self, ControlMessage, Frame, FramePayload};
 
 pub mod types;
 pub mod worker_client;
 
-pub type BoxError = common_net::metrics::BoxError;
+pub type BoxError = Box<dyn std::error::Error>;
 
 pub const HEALTHZ_PATH: &str = "/healthz";
 pub const VERSION_PATH: &str = "/version";
 pub const METRICS_PATH: &str = "/metrics";
 pub const WS_PATH: &str = "/ws";
-pub const NEGOTIATE_PATH: &str = "/negotiate";
 
 static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
@@ -37,23 +35,6 @@ static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
         &["path"]
     )
     .expect("register gateway_http_requests_total")
-});
-
-// Metrics for WS state backpressure
-static STATE_BUFFER_DROPPED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "gateway_ws_state_dropped_total",
-        "So goi state bi drop do backpressure"
-    )
-    .expect("register gateway_ws_state_dropped_total")
-});
-
-static STATE_BUFFER_DEPTH: Lazy<IntGauge> = Lazy::new(|| {
-    register_int_gauge!(
-        "gateway_ws_state_buffer_depth",
-        "Do sau buffer state hien tai"
-    )
-    .expect("register gateway_ws_state_buffer_depth")
 });
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -94,7 +75,6 @@ pub fn build_router(_worker_endpoint: &str) -> Result<Router, BoxError> {
         .route(HEALTHZ_PATH, get(healthz))
         .route(VERSION_PATH, get(version))
         .route(METRICS_PATH, get(metrics))
-        .route(NEGOTIATE_PATH, get(negotiate))
         .route(WS_PATH, get(ws_handler))
         )
 }
@@ -130,94 +110,12 @@ async fn metrics() -> impl IntoResponse {
         .unwrap()
 }
 
-#[derive(serde::Serialize)]
-struct TransportInfo<'a> {
-    kind: &'a str,
-    available: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    endpoint: Option<&'a str>,
-}
-
-#[derive(serde::Serialize)]
-struct NegotiationBody<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    order: Option<Vec<&'a str>>, // server may omit to use client default
-    transports: Vec<TransportInfo<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    auth: Option<serde_json::Value>,
-}
-
-async fn negotiate() -> impl IntoResponse {
-    HTTP_REQUESTS_TOTAL.with_label_values(&[NEGOTIATE_PATH]).inc();
-    let body = NegotiationBody {
-        order: Some(vec!["webtransport", "webrtc", "websocket"]),
-        transports: vec![
-            TransportInfo { kind: "webtransport", available: false, endpoint: None },
-            TransportInfo { kind: "webrtc", available: false, endpoint: None },
-            TransportInfo { kind: "websocket", available: true, endpoint: Some(WS_PATH) },
-        ],
-        auth: None,
-    };
-    Json(body)
-}
-
 async fn ws_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(ws_session)
 }
 
-// Transport abstraction (WS implementation)
-#[derive(Clone, Default)]
-struct WsTransportState {
-    next_control_seq: u32,
-    next_state_seq: u32,
-}
-
-impl WsTransportState {
-    fn alloc_sequence(&mut self, channel: Channel) -> u32 {
-        match channel {
-            Channel::Control => { let s = self.next_control_seq; self.next_control_seq = self.next_control_seq.wrapping_add(1); s }
-            Channel::State => { let s = self.next_state_seq; self.next_state_seq = self.next_state_seq.wrapping_add(1); s }
-        }
-    }
-}
-
 async fn ws_session(mut socket: WebSocket) {
-    let mut transport_state = WsTransportState::default();
-    // simple bounded buffer with watermarks
-    const STATE_BUFFER_CAPACITY: usize = 128;
-    const STATE_LOW_WATERMARK: usize = 48;
-    let mut state_buffer: std::collections::VecDeque<Vec<u8>> =
-        std::collections::VecDeque::with_capacity(STATE_BUFFER_CAPACITY);
-    let tick_ms: u64 = std::env::var("GATEWAY_TICK_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(250);
-    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(tick_ms));
-    let mut state_seq = 0u32;
-
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                let seq = state_seq; state_seq = state_seq.wrapping_add(1);
-                let msg = StateMessage::Event { name: "tick".into(), data: serde_json::json!({"seq": seq}) };
-                if let Ok(bytes) = message::encode(&Frame::state(seq, timestamp_ms(), msg)) {
-                    if state_buffer.len() >= STATE_BUFFER_CAPACITY {
-                        let _ = state_buffer.pop_front();
-                        STATE_BUFFER_DROPPED_TOTAL.inc();
-                    }
-                    state_buffer.push_back(bytes);
-                    STATE_BUFFER_DEPTH.set(state_buffer.len() as i64);
-                }
-                // active draining when above low watermark
-                while state_buffer.len() > STATE_LOW_WATERMARK {
-                    if let Some(bytes) = state_buffer.pop_front() {
-                        let _ = socket.send(WsMessage::Binary(bytes)).await;
-                        STATE_BUFFER_DEPTH.set(state_buffer.len() as i64);
-                    } else { break; }
-                }
-            }
-            maybe_msg = socket.recv() => {
-                let Some(msg) = maybe_msg else { break; };
+    while let Some(msg) = socket.recv().await {
         match msg {
             Ok(WsMessage::Binary(bytes)) => {
                 match message::decode(&bytes) {
@@ -225,15 +123,10 @@ async fn ws_session(mut socket: WebSocket) {
                     Ok(Frame { payload, .. }) => {
                         match payload {
                             FramePayload::Control { message: ControlMessage::Ping { nonce } } => {
-                                let seq = transport_state.alloc_sequence(Channel::Control);
-                                let frame = Frame::control(seq, timestamp_ms(), ControlMessage::Pong { nonce });
-                                if let Ok(reply) = message::encode(&frame) { let _ = socket.send(WsMessage::Binary(reply)).await; }
-                            }
-                            FramePayload::Control { message: ControlMessage::JoinRoom { room_id, reconnect_token: _ } } => {
-                                // Trả về event state tối thiểu xác nhận join
-                                let seq = transport_state.alloc_sequence(Channel::State);
-                                let state = StateMessage::Event { name: "joined".into(), data: serde_json::json!({"room_id": room_id}) };
-                                if let Ok(reply) = message::encode(&Frame::state(seq, timestamp_ms(), state)) { let _ = socket.send(WsMessage::Binary(reply)).await; }
+                                let frame = Frame::control(0, 0, ControlMessage::Pong { nonce });
+                                if let Ok(reply) = message::encode(&frame) {
+                                    let _ = socket.send(WsMessage::Binary(reply)).await;
+                                }
                             }
                             _ => {
                                 // echo nguyên gốc nếu không phải Ping
@@ -251,14 +144,8 @@ async fn ws_session(mut socket: WebSocket) {
             Ok(WsMessage::Close(_)) | Err(_) => break,
             _ => {}
         }
-            }
-        }
     }
-}
-
-fn timestamp_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    let _ = socket.close().await;
 }
 
 pub async fn run(config: GatewayConfig, shutdown_rx: common_net::shutdown::ShutdownReceiver) -> Result<(), BoxError> {
