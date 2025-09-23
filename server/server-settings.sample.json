@@ -1,0 +1,14 @@
+{
+  "gateway": {
+    "bind_addr": "127.0.0.1:3000",
+    "worker_endpoint": "http://127.0.0.1:50051"
+  },
+  "worker": {
+    "metrics_addr": "127.0.0.1:3100",
+    "rpc_addr": "127.0.0.1:50051",
+    "fail_fast": false
+  },
+  "room_manager": {
+    "metrics_addr": "127.0.0.1:3200"
+  }
+}

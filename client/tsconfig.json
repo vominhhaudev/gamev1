@@ -1,0 +1,10 @@
+{
+  "extends": "@sveltejs/kit/tsconfig",
+  "compilerOptions": {
+    "baseUrl": "."
+  },
+  "include": [
+    "src/**/*",
+    "vite.config.ts"
+  ]
+}

@@ -1,0 +1,141 @@
+use std::fmt::Display;
+
+use async_trait::async_trait;
+
+use crate::message::Frame;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    WebSocket,
+    WebTransport,
+    WebRtc,
+}
+
+#[derive(Debug)]
+pub struct TransportError {
+    pub kind: TransportErrorKind,
+    pub context: String,
+}
+
+impl TransportError {
+    pub fn new(kind: TransportErrorKind, context: impl Into<String>) -> Self {
+        Self {
+            kind,
+            context: context.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportErrorKind {
+    ConnectionClosed,
+    EncodingFailure,
+    DecodingFailure,
+    Backpressure,
+    Io,
+    Unsupported,
+}
+
+impl Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.kind, self.context)
+    }
+}
+
+impl std::error::Error for TransportError {}
+
+#[async_trait]
+pub trait GameTransport {
+    fn kind(&self) -> TransportKind;
+
+    async fn send_frame(&mut self, frame: Frame) -> Result<(), TransportError>;
+
+    async fn recv_frame(&mut self) -> Result<Frame, TransportError>;
+
+    async fn close(&mut self) -> Result<(), TransportError>;
+
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+/// Convenient helpers cho control/state channel.
+pub async fn send_control<T: GameTransport + ?Sized>(
+    transport: &mut T,
+    sequence: u32,
+    timestamp_ms: u64,
+    control: crate::message::ControlMessage,
+) -> Result<(), TransportError> {
+    let frame = Frame::control(sequence, timestamp_ms, control);
+    transport.send_frame(frame).await
+}
+
+pub async fn send_state<T: GameTransport + ?Sized>(
+    transport: &mut T,
+    sequence: u32,
+    timestamp_ms: u64,
+    state: crate::message::StateMessage,
+) -> Result<(), TransportError> {
+    let frame = Frame::state(sequence, timestamp_ms, state);
+    transport.send_frame(frame).await
+}
+
+/// Mock transport dung cho test, chua co implementation network thuc te.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{Channel, ControlMessage};
+    use std::collections::VecDeque;
+
+    struct MockTransport {
+        kind: TransportKind,
+        queue: VecDeque<Frame>,
+    }
+
+    #[async_trait]
+    impl GameTransport for MockTransport {
+        fn kind(&self) -> TransportKind {
+            self.kind
+        }
+
+        async fn send_frame(&mut self, frame: Frame) -> Result<(), TransportError> {
+            self.queue.push_back(frame);
+            Ok(())
+        }
+
+        async fn recv_frame(&mut self) -> Result<Frame, TransportError> {
+            self.queue
+                .pop_front()
+                .ok_or_else(|| TransportError::new(TransportErrorKind::ConnectionClosed, "empty"))
+        }
+
+        async fn close(&mut self) -> Result<(), TransportError> {
+            self.queue.clear();
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn control_roundtrip() {
+        let mut transport = MockTransport {
+            kind: TransportKind::WebSocket,
+            queue: VecDeque::new(),
+        };
+
+        send_control(&mut transport, 1, 123, ControlMessage::Ping { nonce: 7 })
+            .await
+            .expect("send");
+
+        let frame = transport.recv_frame().await.expect("recv");
+        assert_eq!(frame.channel, Channel::Control);
+
+        match frame.payload {
+            FramePayload::Control {
+                message: ControlMessage::Ping { nonce },
+            } => {
+                assert_eq!(nonce, 7);
+            }
+            other => panic!("unexpected payload {other:?}"),
+        }
+    }
+}

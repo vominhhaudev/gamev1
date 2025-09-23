@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package worker.v1;
+
+service Worker {
+  rpc JoinRoom(JoinRoomRequest) returns (JoinRoomResponse);
+  rpc LeaveRoom(LeaveRoomRequest) returns (LeaveRoomResponse);
+  rpc PushInput(PushInputRequest) returns (PushInputResponse);
+}
+
+message JoinRoomRequest {
+  string room_id = 1;
+}
+
+message JoinRoomResponse {
+  bool ok = 1;
+  string room_id = 2;
+  Snapshot snapshot = 3;
+  string error = 4;
+}
+
+message LeaveRoomRequest {
+  string room_id = 1;
+}
+
+message LeaveRoomResponse {
+  bool ok = 1;
+  string room_id = 2;
+  string error = 3;
+}
+
+message PushInputRequest {
+  string room_id = 1;
+  uint32 sequence = 2;
+  string payload_json = 3;
+}
+
+message PushInputResponse {
+  bool ok = 1;
+  string room_id = 2;
+  Snapshot snapshot = 3;
+  string error = 4;
+}
+
+message Snapshot {
+  uint64 tick = 1;
+  string payload_json = 2;
+}

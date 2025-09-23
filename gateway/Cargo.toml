@@ -1,0 +1,39 @@
+[package]
+name = "gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.7", features = ["ws", "macros", "json", "tokio", "http1"] }
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_bytes = "0.11"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+metrics = "0.23"
+metrics-exporter-prometheus = "0.15"
+
+# gRPC client – KHÔNG TLS
+prost = "0.13"
+tonic = { version = "0.11", default-features = false, features = ["transport"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# proto nội bộ
+proto = { path = "../proto" }
+common-net = { path = "../common-net" }
+prometheus = "0.13"
+once_cell = "1"
+futures = "0.3"
+
+base64 = "0.22"
+
+[dev-dependencies]
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-tungstenite = { version = "0.24" }
+worker = { path = "../worker" }

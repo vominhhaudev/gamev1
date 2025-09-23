@@ -1,0 +1,9 @@
+/target/
+/.vscode/
+/.idea/
+*.log
+.env
+*.exe
+*.pdb
+*.bin
+*.rlib
