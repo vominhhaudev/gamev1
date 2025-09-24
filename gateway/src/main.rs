@@ -1,16 +1,19 @@
-mod worker_client;
 mod types;
+mod worker_client;
 
 use axum::{
-    extract::{State, ws::{WebSocketUpgrade, Message, WebSocket}},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     routing::{get, post},
     Json, Router,
 };
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use std::net::SocketAddr;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
-use std::net::SocketAddr;
 
 use types::InputReq;
 use worker_client::WorkerClient;
@@ -30,21 +33,33 @@ async fn main() -> anyhow::Result<()> {
 
     let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
 
-    let worker_uri = std::env::var("WORKER_GRPC_URI")
-        .unwrap_or_else(|_| "http://127.0.0.1:50051".into());
+    let worker_uri =
+        std::env::var("WORKER_GRPC_URI").unwrap_or_else(|_| "http://127.0.0.1:50051".into());
     let worker = WorkerClient::connect(&worker_uri).await?;
 
-    let state = AppState { build: env!("CARGO_PKG_VERSION"), worker };
+    let state = AppState {
+        build: env!("CARGO_PKG_VERSION"),
+        worker,
+    };
 
     let app = Router::new()
         .route("/healthz", get(|| async { axum::http::StatusCode::OK }))
-        .route("/version", get(|State(state): State<AppState>| async move {
-            axum::Json(serde_json::json!({
-                "name": "gateway",
-                "version": state.build,
-            }))
-        }))
-        .route("/metrics", get(move || { let h = metrics_handle.clone(); async move { h.render() } }))
+        .route(
+            "/version",
+            get(|State(state): State<AppState>| async move {
+                axum::Json(serde_json::json!({
+                    "name": "gateway",
+                    "version": state.build,
+                }))
+            }),
+        )
+        .route(
+            "/metrics",
+            get(move || {
+                let h = metrics_handle.clone();
+                async move { h.render() }
+            }),
+        )
         .route("/inputs", post(post_inputs))
         .route("/ws", get(ws_echo))
         .with_state(state)
@@ -72,7 +87,7 @@ async fn post_inputs(
 
     match state.worker.push_input(req).await {
         Ok(_) => {
-            histogram!("gw.inputs.push_ms").record(t0.elapsed().as_secs_f64()*1000.0);
+            histogram!("gw.inputs.push_ms").record(t0.elapsed().as_secs_f64() * 1000.0);
             counter!("gw.inputs.ok").increment(1);
             Ok("ok")
         }
@@ -84,9 +99,10 @@ async fn post_inputs(
     }
 }
 
-async fn ws_echo(ws: WebSocketUpgrade, State(_state): State<AppState>)
-    -> impl axum::response::IntoResponse
-{
+async fn ws_echo(
+    ws: WebSocketUpgrade,
+    State(_state): State<AppState>,
+) -> impl axum::response::IntoResponse {
     ws.on_upgrade(move |socket| echo_session(socket))
 }
 
@@ -103,7 +119,9 @@ async fn echo_session(mut socket: WebSocket) {
                 let _ = socket.send(Message::Binary(b)).await;
                 counter!("gw.ws.echo_bin").increment(1);
             }
-            Ok(Message::Ping(p)) => { let _ = socket.send(Message::Pong(p)).await; }
+            Ok(Message::Ping(p)) => {
+                let _ = socket.send(Message::Pong(p)).await;
+            }
             Ok(Message::Close(_)) | Err(_) => break,
             _ => {}
         }

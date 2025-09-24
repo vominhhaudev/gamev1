@@ -11,17 +11,16 @@ use axum::{
     Json, Router,
 };
 use once_cell::sync::Lazy;
-use prometheus::{
-    register_int_counter_vec, Encoder, IntCounterVec, TextEncoder,
-};
+use prometheus::{register_int_counter_vec, Encoder, IntCounterVec, TextEncoder};
 use tracing::error;
 
 use common_net::message::{self, ControlMessage, Frame, FramePayload};
 
+pub mod auth;
 pub mod types;
 pub mod worker_client;
 
-pub type BoxError = Box<dyn std::error::Error>;
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 pub const HEALTHZ_PATH: &str = "/healthz";
 pub const VERSION_PATH: &str = "/version";
@@ -51,7 +50,10 @@ impl GatewaySettings {
             .map_err(|e| Box::new(e) as BoxError)?;
         let worker_endpoint = std::env::var("WORKER_ENDPOINT")
             .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
-        Ok(Self { bind_addr, worker_endpoint })
+        Ok(Self {
+            bind_addr,
+            worker_endpoint,
+        })
     }
 }
 
@@ -64,7 +66,11 @@ pub struct GatewayConfig {
 
 impl GatewayConfig {
     pub fn from_settings(s: GatewaySettings) -> Self {
-        Self { bind_addr: s.bind_addr, worker_endpoint: s.worker_endpoint, ready_tx: None }
+        Self {
+            bind_addr: s.bind_addr,
+            worker_endpoint: s.worker_endpoint,
+            ready_tx: None,
+        }
     }
 }
 
@@ -75,8 +81,7 @@ pub fn build_router(_worker_endpoint: &str) -> Result<Router, BoxError> {
         .route(HEALTHZ_PATH, get(healthz))
         .route(VERSION_PATH, get(version))
         .route(METRICS_PATH, get(metrics))
-        .route(WS_PATH, get(ws_handler))
-        )
+        .route(WS_PATH, get(ws_handler)))
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -122,7 +127,9 @@ async fn ws_session(mut socket: WebSocket) {
                     // Bỏ qua các field khác của Frame bằng `..` để khớp với struct hiện tại
                     Ok(Frame { payload, .. }) => {
                         match payload {
-                            FramePayload::Control { message: ControlMessage::Ping { nonce } } => {
+                            FramePayload::Control {
+                                message: ControlMessage::Ping { nonce },
+                            } => {
                                 let frame = Frame::control(0, 0, ControlMessage::Pong { nonce });
                                 if let Ok(reply) = message::encode(&frame) {
                                     let _ = socket.send(WsMessage::Binary(reply)).await;
@@ -134,13 +141,17 @@ async fn ws_session(mut socket: WebSocket) {
                             }
                         }
                     }
-                    Err(_) => { let _ = socket.send(WsMessage::Binary(bytes)).await; }
+                    Err(_) => {
+                        let _ = socket.send(WsMessage::Binary(bytes)).await;
+                    }
                 }
             }
             Ok(WsMessage::Text(s)) => {
                 let _ = socket.send(WsMessage::Text(s)).await;
             }
-            Ok(WsMessage::Ping(p)) => { let _ = socket.send(WsMessage::Pong(p)).await; }
+            Ok(WsMessage::Ping(p)) => {
+                let _ = socket.send(WsMessage::Pong(p)).await;
+            }
             Ok(WsMessage::Close(_)) | Err(_) => break,
             _ => {}
         }
@@ -148,11 +159,17 @@ async fn ws_session(mut socket: WebSocket) {
     let _ = socket.close().await;
 }
 
-pub async fn run(config: GatewayConfig, shutdown_rx: common_net::shutdown::ShutdownReceiver) -> Result<(), BoxError> {
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await
+pub async fn run(
+    config: GatewayConfig,
+    shutdown_rx: common_net::shutdown::ShutdownReceiver,
+) -> Result<(), BoxError> {
+    let listener = tokio::net::TcpListener::bind(config.bind_addr)
+        .await
         .map_err(|e| Box::new(e) as BoxError)?;
     let local_addr = listener.local_addr().map_err(|e| Box::new(e) as BoxError)?;
-    if let Some(tx) = config.ready_tx { let _ = tx.send(local_addr); }
+    if let Some(tx) = config.ready_tx {
+        let _ = tx.send(local_addr);
+    }
 
     let app = build_router(&config.worker_endpoint)?;
     let make_svc = app.into_make_service();

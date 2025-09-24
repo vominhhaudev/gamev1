@@ -3,10 +3,7 @@ use tonic::transport::{Channel, Endpoint};
 use tracing::info;
 
 // Nếu máy bạn không có module v1, đổi thành: use proto::worker::{ ... };
-use proto::worker::v1::{
-    worker_client::WorkerClient as PbClient,
-    PushInputRequest,
-};
+use proto::worker::v1::{worker_client::WorkerClient as PbClient, PushInputRequest};
 
 #[derive(Clone)]
 pub struct WorkerClient {
@@ -21,13 +18,17 @@ impl WorkerClient {
         match ep.connect().await {
             Ok(channel) => {
                 info!(%uri, "gateway connected to worker");
-                Ok(Self { inner: PbClient::new(channel) })
+                Ok(Self {
+                    inner: PbClient::new(channel),
+                })
             }
             Err(e) => {
                 // Không chặn khởi động gateway nếu worker chưa chạy: dùng connect_lazy.
                 tracing::warn!(error=?e, %uri, "worker not available; using lazy channel");
                 let channel = Endpoint::from_shared(uri.to_string())?.connect_lazy();
-                Ok(Self { inner: PbClient::new(channel) })
+                Ok(Self {
+                    inner: PbClient::new(channel),
+                })
             }
         }
     }
