@@ -16,6 +16,7 @@ use tracing::error;
 
 use common_net::message::{self, ControlMessage, Frame, FramePayload};
 
+#[cfg(not(feature = "wallet_disabled"))]
 pub mod auth;
 pub mod types;
 pub mod worker_client;

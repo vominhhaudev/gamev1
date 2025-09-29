@@ -16,6 +16,10 @@ use std::{
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+#[cfg(feature = "wallet_disabled")]
+
+compile_error!("Module auth đã bị đóng băng. Bật lại feature 'wallet' để sử dụng.");
+
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Nonce request payload.

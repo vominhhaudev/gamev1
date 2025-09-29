@@ -9,6 +9,7 @@ use std::{collections::VecDeque, time::Duration};
 use tokio::time;
 use tracing::error;
 use wtransport::{ClientConfig, Endpoint, ServerConfig};
+use rcgen;
 
 /// Trait chung cho các transport (WS, QUIC, RTC).
 #[async_trait::async_trait]
@@ -197,7 +198,7 @@ impl Transport for QuicTransport {
     }
 }
 
-// Metrics for state backpressure
+
 static STATE_BUFFER_DROPPED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
         "gateway_state_dropped_total",
@@ -214,7 +215,7 @@ static STATE_BUFFER_DEPTH: Lazy<IntGauge> = Lazy::new(|| {
     .expect("register gateway_state_buffer_depth")
 });
 
-/// Utility function for timestamp.
+
 pub fn timestamp_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
