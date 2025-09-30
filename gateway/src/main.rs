@@ -9,10 +9,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use hyper::{server::conn::AddrIncoming, Server as HyperServer};
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::net::SocketAddr;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+// Tạm thời loại bỏ các layer gây lỗi với axum 0.6
+// use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 
 use types::InputReq;
@@ -62,14 +64,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/inputs", post(post_inputs))
         .route("/ws", get(ws_echo))
-        .with_state(state)
-        .layer(CorsLayer::permissive())
-        .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http());
+        .with_state(state);
 
     let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
     info!(%addr, "gateway listening");
-    axum::serve(tokio::net::TcpListener::bind(addr).await?, app).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let incoming = AddrIncoming::from_listener(listener).expect("failed to create incoming");
+    HyperServer::builder(incoming)
+        .serve(app.into_make_service())
+        .await?;
     Ok(())
 }
 

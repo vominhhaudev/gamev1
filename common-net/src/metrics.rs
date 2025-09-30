@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 
 use axum::{
-    body::Body,
     http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::get,
     Router,
+    Server,
 };
 use once_cell::sync::OnceCell;
 use prometheus::{
@@ -138,11 +138,13 @@ pub fn metrics_router(metrics_path: &'static str) -> Router {
 }
 
 pub async fn serve_metrics(
-    listener: TcpListener,
+    listener: tokio::net::TcpListener,
     metrics_path: &'static str,
 ) -> Result<(), BoxError> {
+    let std_listener = listener.into_std()?;
     let router = metrics_router(metrics_path);
-    axum::serve(listener, router)
+    Server::from_tcp(std_listener)?
+        .serve(router.into_make_service())
         .await
         .map_err(|err| Box::new(err) as BoxError)
 }
@@ -173,20 +175,26 @@ async fn metrics_handler() -> impl IntoResponse {
 
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
         error!(%err, "metrics: encode that bai");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "metrics encode failed"
+        ).into_response();
     }
 
     let body = match String::from_utf8(buffer) {
         Ok(text) => text,
         Err(err) => {
             error!(%err, "metrics: UTF-8 sai");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "metrics utf8 failed"
+            ).into_response();
         }
     };
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, encoder.format_type())
-        .body(Body::from(body))
-        .unwrap()
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, encoder.format_type())],
+        body
+    ).into_response()
 }

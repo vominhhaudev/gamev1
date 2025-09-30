@@ -71,6 +71,27 @@ pub enum ControlMessage {
     AuthToken {
         jwt: String,
     },
+    // WebRTC signaling messages
+    WebRtcOffer {
+        room_id: String,
+        peer_id: String,
+        target_peer_id: Option<String>, // None = broadcast to all
+        sdp: String,
+    },
+    WebRtcAnswer {
+        room_id: String,
+        peer_id: String,
+        target_peer_id: String,
+        sdp: String,
+    },
+    WebRtcIceCandidate {
+        room_id: String,
+        peer_id: String,
+        target_peer_id: Option<String>, // None = broadcast to all
+        candidate: String,
+        sdp_mid: String,
+        sdp_mline_index: u32,
+    },
 }
 
 /// State plane messages (snapshot, delta, event...).
