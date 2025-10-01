@@ -1,6 +1,11 @@
 pub mod ws;
 pub use ws::WsTransport;
 
+#[cfg(feature = "webrtc")]
+pub mod webrtc;
+#[cfg(feature = "webrtc")]
+pub use webrtc::WebRtcTransport;
+
 use std::fmt::Display;
 
 use async_trait::async_trait;

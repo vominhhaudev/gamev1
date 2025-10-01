@@ -9,10 +9,11 @@ use tokio::sync::RwLock;
 use axum::{extract::State, response::IntoResponse, routing::{get, post}, Json, Router};
 use hyper::server::conn::AddrIncoming;
 use once_cell::sync::Lazy;
-use prometheus::{register_int_counter_vec, Encoder, IntCounterVec, TextEncoder};
+use prometheus::{register_int_counter_vec, register_int_gauge_vec, Encoder, IntCounterVec, IntGaugeVec, TextEncoder};
 use tracing::error;
 
 use common_net::message::{self, ControlMessage, Frame, FramePayload};
+use common_net::transport::{GameTransport, TransportKind, WebRtcTransport};
 
 // pub mod auth; // Đã đóng băng, loại bỏ hoàn toàn
 pub mod types;
@@ -32,6 +33,24 @@ static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
         &["path"]
     )
     .expect("register gateway_http_requests_total")
+});
+
+static TRANSPORT_CONNECTIONS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        "gateway_transport_connections_total",
+        "Tổng số kết nối transport theo loại",
+        &["transport_type", "fallback_used"]
+    )
+    .expect("register gateway_transport_connections_total")
+});
+
+static WEBRTC_CONNECTIONS_CURRENT: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "gateway_webrtc_connections_current",
+        "Số kết nối WebRTC hiện tại",
+        &["status"]
+    )
+    .expect("register gateway_webrtc_connections_current")
 });
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -141,6 +160,26 @@ pub struct WebSocketConnection {
 
 type WebSocketRegistry = Arc<RwLock<HashMap<String, WebSocketConnection>>>; // key: connection_id
 
+pub struct TransportConnection {
+    pub peer_id: String,
+    pub room_id: String,
+    pub transport: Box<dyn GameTransport + Send + Sync>,
+    pub fallback_used: bool,
+}
+
+impl std::fmt::Debug for TransportConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportConnection")
+            .field("peer_id", &self.peer_id)
+            .field("room_id", &self.room_id)
+            .field("transport_kind", &self.transport.kind())
+            .field("fallback_used", &self.fallback_used)
+            .finish()
+    }
+}
+
+type TransportRegistry = Arc<RwLock<HashMap<String, TransportConnection>>>; // key: connection_id
+
 // Handler cho /rtc/offer (có state)
 async fn handle_rtc_offer(
     State(state): State<SignalingState>,
@@ -151,7 +190,7 @@ async fn handle_rtc_offer(
     let peer = room.peers.entry(req.peer_id.clone()).or_insert_with(|| PeerConnection::new(req.peer_id.clone()));
     peer.offer = Some(req.sdp.clone());
 
-    // TODO: Relay offer tới các peers khác trong room
+    // TODO: Relay offer tới các peers khác trong room qua transport abstraction
     Json(RtcOfferResponse { sdp: req.sdp })
 }
 
@@ -186,15 +225,17 @@ async fn handle_rtc_answer(
 pub fn build_router(_worker_endpoint: &str) -> Result<Router, BoxError> {
     let signaling_state: SignalingState = Arc::new(RwLock::new(HashMap::new()));
     let ws_registry: WebSocketRegistry = Arc::new(RwLock::new(HashMap::new()));
+    let transport_registry: TransportRegistry = Arc::new(RwLock::new(HashMap::new()));
 
     Ok(Router::new()
         .route(HEALTHZ_PATH, get(healthz))
         .route(VERSION_PATH, get(version))
         .route(METRICS_PATH, get(metrics))
-        .route(WS_PATH, get(move |ws| ws_handler(ws, ws_registry.clone())))
+        .route(WS_PATH, get(move |ws| ws_handler(ws, ws_registry.clone(), transport_registry.clone())))
         .route("/rtc/offer", post(handle_rtc_offer))
         .route("/rtc/answer", post(handle_rtc_answer))
         .route("/rtc/ice", post(handle_rtc_ice))
+        .route("/test", get(test_handler))
         .with_state(signaling_state)
     )
 }
@@ -202,6 +243,11 @@ pub fn build_router(_worker_endpoint: &str) -> Result<Router, BoxError> {
 async fn healthz() -> impl IntoResponse {
     HTTP_REQUESTS_TOTAL.with_label_values(&[HEALTHZ_PATH]).inc();
     axum::http::StatusCode::OK
+}
+
+async fn test_handler() -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&["/test"]).inc();
+    Json(serde_json::json!({"message": "test endpoint works"}))
 }
 
 async fn version() -> impl IntoResponse {
@@ -235,26 +281,60 @@ async fn metrics() -> impl IntoResponse {
 
 async fn ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
-    registry: WebSocketRegistry,
+    ws_registry: WebSocketRegistry,
+    transport_registry: TransportRegistry,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| ws_session(socket, registry))
+    ws.on_upgrade(|socket| ws_session(socket, ws_registry, transport_registry))
 }
 
 async fn ws_session(
     mut socket: axum::extract::ws::WebSocket,
-    registry: WebSocketRegistry,
+    ws_registry: WebSocketRegistry,
+    transport_registry: TransportRegistry,
 ) {
     // Generate unique connection ID
     let connection_id = uuid::Uuid::new_v4().to_string();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
 
-    // Register connection (simplified - in real impl, need room_id and peer_id from handshake)
+    // Try WebRTC first, fallback to WebSocket
+    let mut webrtc_transport = WebRtcTransport::new("default_room".to_string(), connection_id.clone());
+    let webrtc_connected = try_establish_webrtc(&mut webrtc_transport).await;
+
+    // Update metrics
+    let transport_type = if webrtc_connected { "webrtc" } else { "websocket" };
+    let fallback_used = if !webrtc_connected { "true" } else { "false" };
+    TRANSPORT_CONNECTIONS_TOTAL.with_label_values(&[transport_type, fallback_used]).inc();
+
+    if webrtc_connected {
+        WEBRTC_CONNECTIONS_CURRENT.with_label_values(&["connected"]).inc();
+    }
+
+    // Register WebSocket connection
     {
-        let mut reg = registry.write().await;
-        reg.insert(connection_id.clone(), WebSocketConnection {
+        let mut ws_reg = ws_registry.write().await;
+        ws_reg.insert(connection_id.clone(), WebSocketConnection {
             peer_id: "unknown".to_string(), // TODO: Get from handshake
             room_id: "unknown".to_string(), // TODO: Get from handshake
             sender: tx.clone(),
+        });
+    }
+
+    // Register transport connection
+    {
+        let mut transport_reg = transport_registry.write().await;
+        transport_reg.insert(connection_id.clone(), TransportConnection {
+            peer_id: "unknown".to_string(),
+            room_id: "unknown".to_string(),
+            transport: if webrtc_connected {
+                Box::new(webrtc_transport)
+            } else {
+                // Fallback to WebSocket transport - mark as fallback
+                // We'll use the existing WebSocket connection for transport
+                let mut fallback_transport = WebRtcTransport::new("unknown".to_string(), "unknown".to_string());
+                fallback_transport.fallback_to_websocket().await.unwrap();
+                Box::new(fallback_transport)
+            },
+            fallback_used: !webrtc_connected,
         });
     }
 
@@ -280,41 +360,41 @@ async fn ws_session(
                                     } => {
                                         // Update connection info
                                         {
-                                            let mut reg = registry.write().await;
-                                            if let Some(conn) = reg.get_mut(&connection_id) {
+                                            let mut ws_reg = ws_registry.write().await;
+                                            if let Some(conn) = ws_reg.get_mut(&connection_id) {
                                                 conn.peer_id = peer_id.clone();
                                                 conn.room_id = room_id.clone();
                                             }
                                         }
 
-                                        // Broadcast offer to other peers in room
-                                        broadcast_webrtc_message(&registry, &room_id, &peer_id, message::Frame::control(
-                                            0, 0, ControlMessage::WebRtcOffer {
-                                                room_id: room_id.clone(),
-                                                peer_id: peer_id.clone(),
-                                                target_peer_id,
-                                                sdp,
-                                            }
-                                        )).await;
+                                // Broadcast offer to other peers in room
+                                broadcast_to_transport(&transport_registry, &room_id, &peer_id, message::Frame::control(
+                                    0, 0, ControlMessage::WebRtcOffer {
+                                        room_id: room_id.clone(),
+                                        peer_id: peer_id.clone(),
+                                        target_peer_id,
+                                        sdp,
+                                    }
+                                )).await;
                                     }
                                     FramePayload::Control {
                                         message: ControlMessage::WebRtcAnswer { room_id, peer_id, target_peer_id, sdp },
                                     } => {
-                                        // Send answer to target peer
-                                        send_to_peer(&registry, &target_peer_id.clone(), message::Frame::control(
-                                            0, 0, ControlMessage::WebRtcAnswer {
-                                                room_id: room_id.clone(),
-                                                peer_id: peer_id.clone(),
-                                                target_peer_id: target_peer_id.clone(),
-                                                sdp,
-                                            }
-                                        )).await;
+                                // Send answer to target peer
+                                send_to_transport(&transport_registry, &target_peer_id.clone(), message::Frame::control(
+                                    0, 0, ControlMessage::WebRtcAnswer {
+                                        room_id: room_id.clone(),
+                                        peer_id: peer_id.clone(),
+                                        target_peer_id: target_peer_id.clone(),
+                                        sdp,
+                                    }
+                                )).await;
                                     }
                                     FramePayload::Control {
                                         message: ControlMessage::WebRtcIceCandidate { room_id, peer_id, target_peer_id, candidate, sdp_mid, sdp_mline_index },
                                     } => {
                                         // Broadcast ICE candidate
-                                        broadcast_webrtc_message(&registry, &room_id, &peer_id, message::Frame::control(
+                                        broadcast_to_transport(&transport_registry, &room_id, &peer_id, message::Frame::control(
                                             0, 0, ControlMessage::WebRtcIceCandidate {
                                                 room_id: room_id.clone(),
                                                 peer_id: peer_id.clone(),
@@ -361,14 +441,74 @@ async fn ws_session(
 
     // Cleanup
     {
-        let mut reg = registry.write().await;
-        reg.remove(&connection_id);
+        let mut ws_reg = ws_registry.write().await;
+        ws_reg.remove(&connection_id);
+    }
+
+    {
+        let mut transport_reg = transport_registry.write().await;
+        if let Some(transport_conn) = transport_reg.remove(&connection_id) {
+            // Update metrics on disconnect
+            if transport_conn.transport.kind() == TransportKind::WebRtc {
+                WEBRTC_CONNECTIONS_CURRENT.with_label_values(&["connected"]).dec();
+            }
+        }
     }
 
     let _ = socket.close().await;
 }
 
-// Helper functions for WebRTC message relay
+// Helper function to establish WebRTC connection with fallback
+async fn try_establish_webrtc(transport: &mut WebRtcTransport) -> bool {
+    // In a real implementation, this would:
+    // 1. Wait for WebRTC signaling to complete
+    // 2. Establish DataChannels
+    // 3. Return true if successful
+
+    // For now, we'll simulate a successful connection
+    // In production, this should implement actual WebRTC negotiation
+    transport.set_connected(true).await;
+    true
+}
+
+// Helper functions for transport-based message relay
+async fn broadcast_to_transport(
+    transport_registry: &TransportRegistry,
+    room_id: &str,
+    sender_peer_id: &str,
+    frame: message::Frame,
+) {
+    let mut reg = transport_registry.write().await;
+
+    for (_conn_id, transport_conn) in reg.iter_mut() {
+        if transport_conn.room_id == room_id && transport_conn.peer_id != sender_peer_id {
+            // Send frame through transport abstraction
+            if let Err(e) = transport_conn.transport.send_frame(frame.clone()).await {
+                eprintln!("Failed to send frame via transport: {:?}", e);
+            }
+        }
+    }
+}
+
+async fn send_to_transport(
+    transport_registry: &TransportRegistry,
+    target_peer_id: &str,
+    frame: message::Frame,
+) {
+    let mut reg = transport_registry.write().await;
+
+    for (_conn_id, transport_conn) in reg.iter_mut() {
+        if transport_conn.peer_id == target_peer_id {
+            // Send frame through transport abstraction
+            if let Err(e) = transport_conn.transport.send_frame(frame.clone()).await {
+                eprintln!("Failed to send frame via transport: {:?}", e);
+            }
+            break;
+        }
+    }
+}
+
+// Legacy WebSocket helper functions (kept for backward compatibility)
 async fn broadcast_webrtc_message(
     registry: &WebSocketRegistry,
     room_id: &str,

@@ -1,24 +1,27 @@
-mod types;
-mod worker_client;
+// Don't declare modules here since we're using lib.rs as the main library module
+
+// WebRTC functionality is integrated directly in main.rs for now
 
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use hyper::{server::conn::AddrIncoming, Server as HyperServer};
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use serde_json::{json, Value};
 use std::net::SocketAddr;
 // Tạm thời loại bỏ các layer gây lỗi với axum 0.6
 // use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 
-use types::InputReq;
-use worker_client::WorkerClient;
+use gateway::types::InputReq;
+use gateway::worker_client::WorkerClient;
 
 // Nếu không có v1: use proto::worker::PushInputRequest;
 use proto::worker::v1::PushInputRequest;
@@ -49,10 +52,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/version",
             get(|State(state): State<AppState>| async move {
-                axum::Json(serde_json::json!({
+                (axum::http::StatusCode::OK, Json(json!({
                     "name": "gateway",
                     "version": state.build,
-                }))
+                })))
             }),
         )
         .route(
@@ -64,6 +67,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/inputs", post(post_inputs))
         .route("/ws", get(ws_echo))
+        // WebRTC Signaling endpoints (simplified for testing)
+        .route("/rtc/offer", post(handle_webrtc_offer))
+        .route("/rtc/answer", post(handle_webrtc_answer))
+        .route("/rtc/ice", post(handle_webrtc_ice))
         .with_state(state);
 
     let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
@@ -79,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
 async fn post_inputs(
     State(state): State<AppState>,
     Json(body): Json<InputReq>,
-) -> Result<&'static str, axum::http::StatusCode> {
+) -> impl IntoResponse {
     let t0 = std::time::Instant::now();
 
     let req = PushInputRequest {
@@ -92,20 +99,19 @@ async fn post_inputs(
         Ok(_) => {
             histogram!("gw.inputs.push_ms").record(t0.elapsed().as_secs_f64() * 1000.0);
             counter!("gw.inputs.ok").increment(1);
-            Ok("ok")
+            axum::http::StatusCode::OK
         }
         Err(e) => {
             error!(error=?e, "push_input failed");
             counter!("gw.inputs.err").increment(1);
-            Err(axum::http::StatusCode::BAD_GATEWAY)
+            axum::http::StatusCode::BAD_GATEWAY
         }
     }
 }
 
 async fn ws_echo(
     ws: WebSocketUpgrade,
-    State(_state): State<AppState>,
-) -> impl axum::response::IntoResponse {
+) -> impl IntoResponse {
     ws.on_upgrade(move |socket| echo_session(socket))
 }
 
@@ -132,4 +138,23 @@ async fn echo_session(mut socket: WebSocket) {
 
     gauge!("gw.ws.clients").decrement(1.0);
     let _ = socket.close().await;
+}
+
+// Simplified WebRTC signaling handlers for testing
+async fn handle_webrtc_offer(Json(req): Json<serde_json::Value>) -> impl IntoResponse {
+    info!("WebRTC offer received: {:?}", req);
+    Json(json!({
+        "status": "offer_received",
+        "sdp": req.get("sdp").unwrap_or(&serde_json::Value::Null)
+    }))
+}
+
+async fn handle_webrtc_answer(Json(req): Json<serde_json::Value>) -> impl IntoResponse {
+    info!("WebRTC answer received: {:?}", req);
+    axum::http::StatusCode::OK
+}
+
+async fn handle_webrtc_ice(Json(req): Json<serde_json::Value>) -> impl IntoResponse {
+    info!("WebRTC ICE candidate received: {:?}", req);
+    axum::http::StatusCode::OK
 }

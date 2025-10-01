@@ -22,6 +22,16 @@ case "$SERVICE" in
     export ROOM_MANAGER_METRICS_ADDR="$ROOMMGR_METRICS"
     exec cargo run -p room-manager
     ;;
+  pocketbase)
+    POCKETBASE_PATH="pocketbase/pocketbase"
+    if [ -f "$POCKETBASE_PATH" ]; then
+      exec ./$POCKETBASE_PATH serve
+    else
+      echo "PocketBase binary not found at $POCKETBASE_PATH" >&2
+      echo "Run: ./scripts/setup-pocketbase.sh" >&2
+      exit 1
+    fi
+    ;;
   *)
     echo "unknown service: $SERVICE" >&2; exit 1;
     ;;

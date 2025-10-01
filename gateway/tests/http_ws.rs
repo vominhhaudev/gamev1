@@ -86,7 +86,7 @@ async fn signaling_end_to_end() -> Result<(), BoxError> {
 
     // Peer 1 gửi offer
     let offer = "sdp-offer-peer1";
-    let offer_req = serde_json::json!({"sdp": offer, "room_id": room_id});
+    let offer_req = serde_json::json!({"sdp": offer, "room_id": room_id, "peer_id": "peer1"});
     let offer_resp = client.post(format!("{base}/rtc/offer")).json(&offer_req).send().await?;
     assert_eq!(StatusCode::OK, offer_resp.status());
     let offer_body: serde_json::Value = offer_resp.json().await?;
@@ -97,7 +97,8 @@ async fn signaling_end_to_end() -> Result<(), BoxError> {
         "candidate": "ice-candidate-peer1",
         "sdp_mid": "0",
         "sdp_mline_index": 0,
-        "room_id": room_id
+        "room_id": room_id,
+        "peer_id": "peer1"
     });
     let ice_resp = client.post(format!("{base}/rtc/ice")).json(&ice).send().await?;
     assert_eq!(StatusCode::OK, ice_resp.status());

@@ -6,7 +6,8 @@ members = [
     "room-manager",
     "server",
     "proto",
-    "services"
+    "services",
+    "pocketbase"
 ]
 
 resolver = "2"

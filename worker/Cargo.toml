@@ -15,5 +15,14 @@ tonic = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 
+# ECS và Physics
+bevy_ecs = "0.13"
+rapier3d = "0.21"
+crossbeam = "0.8"
+
+# Database và HTTP client
+reqwest = { version = "0.11", features = ["json"] }
+anyhow = "1.0"
+
 [dev-dependencies]
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }

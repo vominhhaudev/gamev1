@@ -1,0 +1,13 @@
+[package]
+name = "pocketbase"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+thiserror = "1.0"
+tracing = { workspace = true }

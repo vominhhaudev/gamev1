@@ -1,5 +1,5 @@
 param(
-  [ValidateSet('gateway','worker','room-manager')]
+  [ValidateSet('gateway','worker','room-manager','pocketbase')]
   [string]$Service,
   [string]$GatewayBind = "127.0.0.1:8080",
   [string]$WorkerRpc = "127.0.0.1:50051",
@@ -23,6 +23,15 @@ switch ($Service) {
   'room-manager' {
     $env:ROOM_MANAGER_METRICS_ADDR = $RoomMgrMetrics
     cargo run -p room-manager
+  }
+  'pocketbase' {
+    $PocketBasePath = "pocketbase/pocketbase.exe"
+    if (Test-Path $PocketBasePath) {
+      & $PocketBasePath serve
+    } else {
+      Write-Host "PocketBase binary not found at $PocketBasePath"
+      Write-Host "Run: pwsh -File scripts/setup-pocketbase.ps1"
+    }
   }
 }
 

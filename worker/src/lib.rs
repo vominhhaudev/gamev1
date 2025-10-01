@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use common_net::metrics::{self, SimulationMetrics};
 use std::{net::SocketAddr, sync::Arc};
 use tracing::info;
@@ -107,3 +109,5 @@ fn env_socket(key: &str, default: &str) -> Result<SocketAddr, BoxError> {
 
 pub mod rpc;
 pub mod snapshot;
+pub mod simulation;
+pub mod database;
