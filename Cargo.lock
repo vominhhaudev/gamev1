@@ -4677,8 +4677,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy_ecs",
+ "chrono",
  "common-net",
  "crossbeam",
+ "dashmap",
+ "once_cell",
+ "pocketbase",
  "prost",
  "prost-types",
  "proto",

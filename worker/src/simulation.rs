@@ -78,9 +78,8 @@ impl SimulationWorld {
 
     pub fn step(&mut self, _delta_time: Duration) {
         self.tick_count += 1;
-        tracing::info!("Simulation tick: {}", self.tick_count);
 
-        // Add a simple entity for testing
+        // Add a simple entity for testing if none exist (no logging in main loop)
         if self.entities.is_empty() {
             self.entities.push(EntitySnapshot {
                 id: 0,

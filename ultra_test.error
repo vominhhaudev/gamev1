@@ -1,0 +1,126 @@
+warning: C:\Users\Fit\Downloads\gamev1\gateway\Cargo.toml: `default-features` is ignored for tonic, since `default-features` was not specified for `workspace.dependencies.tonic`, this could become a hard error in the future
+warning: unused variable: `callback`
+   --> pocketbase\src\lib.rs:353:53
+    |
+353 |     pub async fn subscribe(&self, collection: &str, callback: impl Fn(Value) + Send + 'static) -> Result<(), PocketBaseError> {
+    |                                                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_callback`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `url`
+   --> pocketbase\src\lib.rs:354:13
+    |
+354 |         let url = format!("{}/api/realtime", self.base_url);
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+warning: unused imports: `Deserialize` and `Serialize`
+ --> common-net\src\transport\webrtc.rs:2:13
+  |
+2 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::collections::VecDeque`
+ --> common-net\src\transport\webrtc.rs:3:5
+  |
+3 | use std::collections::VecDeque;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `debug` and `error`
+ --> common-net\src\transport\webrtc.rs:6:15
+  |
+6 | use tracing::{debug, error, info, warn};
+  |               ^^^^^  ^^^^^
+
+warning: unused import: `StateMessage`
+ --> common-net\src\transport\webrtc.rs:8:45
+  |
+8 | use crate::message::{ControlMessage, Frame, StateMessage};
+  |                                             ^^^^^^^^^^^^
+
+warning: fields `room_id` and `peer_id` are never read
+  --> common-net\src\transport\webrtc.rs:47:5
+   |
+46 | pub struct WebRtcTransport {
+   |            --------------- fields in this struct
+47 |     room_id: String,
+   |     ^^^^^^^
+48 |     peer_id: String,
+   |     ^^^^^^^
+   |
+   = note: `WebRtcTransport` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `pocketbase` (lib) generated 2 warnings
+warning: `common-net` (lib) generated 5 warnings (run `cargo fix --lib -p common-net` to apply 4 suggestions)
+   Compiling worker v0.1.0 (C:\Users\Fit\Downloads\gamev1\worker)
+warning: unused import: `rapier3d::prelude::*`
+ --> worker\src\simulation.rs:3:5
+  |
+3 | use rapier3d::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `rapier3d::geometry::DefaultBroadPhase`
+ --> worker\src\simulation.rs:4:5
+  |
+4 | use rapier3d::geometry::DefaultBroadPhase;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `games`
+   --> worker\src\database.rs:292:17
+    |
+292 |         let mut games: Vec<GameRecord> = Vec::new();
+    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_games`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `cache_hits`
+   --> worker\src\database.rs:293:17
+    |
+293 |         let mut cache_hits = 0;
+    |                 ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cache_hits`
+
+warning: unused variable: `cache_misses`
+   --> worker\src\database.rs:294:17
+    |
+294 |         let mut cache_misses = 0;
+    |                 ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cache_misses`
+
+warning: variable does not need to be mutable
+   --> worker\src\database.rs:292:13
+    |
+292 |         let mut games: Vec<GameRecord> = Vec::new();
+    |             ----^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: variable does not need to be mutable
+   --> worker\src\database.rs:293:13
+    |
+293 |         let mut cache_hits = 0;
+    |             ----^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> worker\src\database.rs:294:13
+    |
+294 |         let mut cache_misses = 0;
+    |             ----^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+error[E0616]: field `base_url` of struct `pocketbase::PocketBaseClient` is private
+   --> worker\src\database.rs:196:61
+    |
+196 |         let url = format!("{}/api/health", self.base_client.base_url);
+    |                                                             ^^^^^^^^ private field
+
+For more information about this error, try `rustc --explain E0616`.
+warning: `worker` (lib) generated 8 warnings
+error: could not compile `worker` (lib) due to 1 previous error; 8 warnings emitted

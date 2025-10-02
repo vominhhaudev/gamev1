@@ -1,0 +1,190 @@
+warning: C:\Users\Fit\Downloads\gamev1\gateway\Cargo.toml: `default-features` is ignored for tonic, since `default-features` was not specified for `workspace.dependencies.tonic`, this could become a hard error in the future
+warning: unused imports: `Deserialize` and `Serialize`
+ --> common-net\src\transport\webrtc.rs:2:13
+  |
+2 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^  ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::collections::VecDeque`
+ --> common-net\src\transport\webrtc.rs:3:5
+  |
+3 | use std::collections::VecDeque;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `debug` and `error`
+ --> common-net\src\transport\webrtc.rs:6:15
+  |
+6 | use tracing::{debug, error, info, warn};
+  |               ^^^^^  ^^^^^
+
+warning: unused import: `StateMessage`
+ --> common-net\src\transport\webrtc.rs:8:45
+  |
+8 | use crate::message::{ControlMessage, Frame, StateMessage};
+  |                                             ^^^^^^^^^^^^
+
+warning: fields `room_id` and `peer_id` are never read
+  --> common-net\src\transport\webrtc.rs:47:5
+   |
+46 | pub struct WebRtcTransport {
+   |            --------------- fields in this struct
+47 |     room_id: String,
+   |     ^^^^^^^
+48 |     peer_id: String,
+   |     ^^^^^^^
+   |
+   = note: `WebRtcTransport` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `common-net` (lib) generated 5 warnings (run `cargo fix --lib -p common-net` to apply 4 suggestions)
+warning: unused variable: `callback`
+   --> pocketbase\src\lib.rs:353:53
+    |
+353 |     pub async fn subscribe(&self, collection: &str, callback: impl Fn(Value) + Send + 'static) -> Result<(), PocketBaseError> {
+    |                                                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_callback`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `url`
+   --> pocketbase\src\lib.rs:354:13
+    |
+354 |         let url = format!("{}/api/realtime", self.base_url);
+    |             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+warning: `pocketbase` (lib) generated 2 warnings
+warning: unused import: `rapier3d::prelude::*`
+ --> worker\src\simulation.rs:3:5
+  |
+3 | use rapier3d::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `rapier3d::geometry::DefaultBroadPhase`
+ --> worker\src\simulation.rs:4:5
+  |
+4 | use rapier3d::geometry::DefaultBroadPhase;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `games`
+   --> worker\src\database.rs:274:17
+    |
+274 |         let mut games: Vec<GameRecord> = Vec::new();
+    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_games`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `cache_hits`
+   --> worker\src\database.rs:275:17
+    |
+275 |         let mut cache_hits = 0;
+    |                 ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cache_hits`
+
+warning: unused variable: `cache_misses`
+   --> worker\src\database.rs:276:17
+    |
+276 |         let mut cache_misses = 0;
+    |                 ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cache_misses`
+
+warning: variable does not need to be mutable
+   --> worker\src\database.rs:274:13
+    |
+274 |         let mut games: Vec<GameRecord> = Vec::new();
+    |             ----^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: variable does not need to be mutable
+   --> worker\src\database.rs:275:13
+    |
+275 |         let mut cache_hits = 0;
+    |             ----^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> worker\src\database.rs:276:13
+    |
+276 |         let mut cache_misses = 0;
+    |             ----^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: constant `DEFAULT_EMAIL` is never used
+  --> worker\src\database.rs:12:7
+   |
+12 | const DEFAULT_EMAIL: &str = "admin@pocketbase.local";
+   |       ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: constant `DEFAULT_PASSWORD` is never used
+  --> worker\src\database.rs:13:7
+   |
+13 | const DEFAULT_PASSWORD: &str = "123456789";
+   |       ^^^^^^^^^^^^^^^^
+
+warning: constant `CACHE_TTL_SECONDS` is never used
+  --> worker\src\database.rs:16:7
+   |
+16 | const CACHE_TTL_SECONDS: u64 = 30; // Cache game state for 30 seconds
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: constant `BATCH_SIZE` is never used
+  --> worker\src\database.rs:17:7
+   |
+17 | const BATCH_SIZE: usize = 10; // Batch database operations
+   |       ^^^^^^^^^^
+
+warning: constant `SYNC_INTERVAL_FRAMES` is never used
+  --> worker\src\database.rs:18:7
+   |
+18 | const SYNC_INTERVAL_FRAMES: u64 = 60; // Sync every 60 frames (1 second at 60fps)
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: method `get_game` is never used
+  --> worker\src\database.rs:37:8
+   |
+28 | impl GameStateCache {
+   | ------------------- method in this implementation
+...
+37 |     fn get_game(&self, game_id: &str) -> Option<GameRecord> {
+   |        ^^^^^^^^
+
+warning: methods `record_cache_hit` and `record_cache_miss` are never used
+  --> worker\src\database.rs:71:8
+   |
+70 | impl DatabaseMetrics {
+   | -------------------- methods in this implementation
+71 |     fn record_cache_hit(&self) {
+   |        ^^^^^^^^^^^^^^^^
+...
+75 |     fn record_cache_miss(&self) {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: `worker` (lib) generated 15 warnings (run `cargo fix --lib -p worker` to apply 5 suggestions)
+   Compiling worker v0.1.0 (C:\Users\Fit\Downloads\gamev1\worker)
+warning: unused import: `tokio::time`
+ --> worker\src\main.rs:4:5
+  |
+4 | use tokio::time;
+  |     ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: value assigned to `frame_start_time` is never read
+  --> worker\src\main.rs:55:13
+   |
+55 |     let mut frame_start_time = Instant::now();
+   |             ^^^^^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+   = note: `#[warn(unused_assignments)]` on by default
+
+warning: `worker` (bin "worker") generated 2 warnings (run `cargo fix --bin "worker"` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.41s
+     Running `target\debug\worker.exe`

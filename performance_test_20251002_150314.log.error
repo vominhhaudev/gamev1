@@ -1,0 +1,2 @@
+warning: C:\Users\Fit\Downloads\gamev1\gateway\Cargo.toml: `default-features` is ignored for tonic, since `default-features` was not specified for `workspace.dependencies.tonic`, this could become a hard error in the future
+    Blocking waiting for file lock on build directory

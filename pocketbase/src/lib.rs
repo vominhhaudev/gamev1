@@ -90,6 +90,10 @@ impl PocketBaseClient {
         self
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     fn get_auth_headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(token) = &self.admin_token {
@@ -360,3 +364,4 @@ impl PocketBaseClient {
         Ok(())
     }
 }
+

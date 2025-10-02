@@ -21,7 +21,7 @@ use std::net::SocketAddr;
 use tracing::{error, info};
 
 use gateway::types::InputReq;
-use gateway::worker_client::WorkerClient;
+use proto::worker::v1::worker_client::WorkerClient;
 
 // Nếu không có v1: use proto::worker::PushInputRequest;
 use proto::worker::v1::PushInputRequest;
@@ -29,7 +29,7 @@ use proto::worker::v1::PushInputRequest;
 #[derive(Clone)]
 struct AppState {
     build: &'static str,
-    worker: WorkerClient,
+    worker: WorkerClient<tonic::transport::Channel>,
 }
 
 #[tokio::main]
@@ -38,9 +38,7 @@ async fn main() -> anyhow::Result<()> {
 
     let metrics_handle = PrometheusBuilder::new().install_recorder().unwrap();
 
-    let worker_uri =
-        std::env::var("WORKER_GRPC_URI").unwrap_or_else(|_| "http://127.0.0.1:50051".into());
-    let worker = WorkerClient::connect(&worker_uri).await?;
+    let worker = WorkerClient::connect("http://127.0.0.1:50051").await?;
 
     let state = AppState {
         build: env!("CARGO_PKG_VERSION"),
@@ -84,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn post_inputs(
-    State(state): State<AppState>,
+    State(mut state): State<AppState>,
     Json(body): Json<InputReq>,
 ) -> impl IntoResponse {
     let t0 = std::time::Instant::now();

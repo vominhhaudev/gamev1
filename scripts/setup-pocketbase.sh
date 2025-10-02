@@ -35,3 +35,4 @@ fi
 echo "PocketBase installed at: $BINARY_PATH"
 echo "To start PocketBase: ./$BINARY_PATH serve"
 echo "Admin UI will be available at: http://127.0.0.1:8090/_/"
+
