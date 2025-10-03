@@ -201,7 +201,7 @@ migrate((app) => {
   app.save(gamesCollection);
   app.save(playersCollection);
 
-  console.log("✅ Fixed collections with correct schema");
+  console.log("Fixed collections with correct schema");
 }, (app) => {
   const games = app.findCollectionByNameOrId("games");
   const players = app.findCollectionByNameOrId("players");
@@ -209,4 +209,6 @@ migrate((app) => {
   if (games) app.delete(games);
   if (players) app.delete(players);
 });
+
+
 

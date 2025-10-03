@@ -363,5 +363,84 @@ impl PocketBaseClient {
 
         Ok(())
     }
+
+    /// Authenticate user with email/password
+    pub async fn auth_user(&self, email: &str, password: &str) -> Result<AuthRecord, PocketBaseError> {
+        let url = format!("{}/api/collections/users/auth-with-password", self.base_url);
+        let auth_data = json!({
+            "identity": email,
+            "password": password
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&auth_data)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let auth_record: AuthRecord = response.json().await?;
+            info!("User authenticated successfully: {}", email);
+            Ok(auth_record)
+        } else {
+            let status = response.status();
+            let error: Value = response.json().await.unwrap_or_default();
+            Err(PocketBaseError::Api {
+                message: error["message"].as_str().unwrap_or("Authentication failed").to_string(),
+                code: status.to_string(),
+            })
+        }
+    }
+
+    /// Refresh user auth token
+    pub async fn refresh_user_token(&self, refresh_token: &str) -> Result<AuthRecord, PocketBaseError> {
+        let url = format!("{}/api/collections/users/auth-refresh", self.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", refresh_token))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let auth_record: AuthRecord = response.json().await?;
+            info!("User token refreshed successfully");
+            Ok(auth_record)
+        } else {
+            let status = response.status();
+            let error: Value = response.json().await.unwrap_or_default();
+            Err(PocketBaseError::Api {
+                message: error["message"].as_str().unwrap_or("Token refresh failed").to_string(),
+                code: status.to_string(),
+            })
+        }
+    }
+
+    /// Get current user info (requires valid auth token)
+    pub async fn get_current_user(&self, token: &str) -> Result<Record, PocketBaseError> {
+        // Use auth-refresh to validate token and get user info
+        let url = format!("{}/api/collections/users/auth-refresh", self.base_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let auth_record: AuthRecord = response.json().await?;
+            Ok(auth_record.record)
+        } else {
+            let status = response.status();
+            let error: Value = response.json().await.unwrap_or_default();
+            Err(PocketBaseError::Api {
+                message: error["message"].as_str().unwrap_or("Failed to get user info").to_string(),
+                code: status.to_string(),
+            })
+        }
+    }
 }
 

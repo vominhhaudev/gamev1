@@ -786,6 +786,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum 0.6.20",
+ "chrono",
  "futures",
  "futures-util",
  "hyper 0.14.32",
@@ -797,6 +798,7 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1357,6 +1359,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "once_cell",
+ "pocketbase",
  "prometheus",
  "prost",
  "prost-types",
@@ -3816,6 +3819,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-test"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2468baabc3311435b55dd935f702f42cd1b8abb7e754fb7dfb16bd36aa88f9f7"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "tokio-tungstenite"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4686,11 +4702,13 @@ dependencies = [
  "prost",
  "prost-types",
  "proto",
+ "rand 0.8.5",
  "rapier3d",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-test",
  "tonic",
  "tracing",
 ]

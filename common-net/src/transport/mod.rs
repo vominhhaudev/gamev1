@@ -6,12 +6,85 @@ pub mod webrtc;
 #[cfg(feature = "webrtc")]
 pub use webrtc::WebRtcTransport;
 
-use std::fmt::Display;
+pub mod manager;
+pub mod traits;
+pub mod metrics;
+
+pub use manager::*;
+pub use traits::*;
+pub use metrics::*;
+
+use std::{fmt::Display, collections::HashMap};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 
 use crate::message::Frame;
 
+// Re-export commonly used types
+pub use traits::{Transport, TransportFactory, TransportManager, TransportConfig, TransportStats, TransportManagerStats};
+pub use manager::{DefaultTransportManager, WebRTCTransportFactory, WebSocketTransportFactory, QUICTransportFactory};
+pub use metrics::{TransportMetrics, TransportHealthStatus, GlobalTransportStats, TransportMetricsData};
+
+// Enhanced transport types for unified abstraction
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TransportType {
+    WebRTC,
+    WebSocket,
+    QUIC,
+}
+
+impl Default for TransportType {
+    fn default() -> Self {
+        TransportType::WebSocket
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MessageType {
+    Control,
+    State,
+    System,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransportMessage {
+    pub id: String,
+    pub message_type: MessageType,
+    pub payload: serde_json::Value,
+    pub timestamp: DateTime<Utc>,
+    pub transport_type: TransportType,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConnectionState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Reconnecting,
+    Failed,
+}
+
+impl Default for ConnectionState {
+    fn default() -> Self {
+        ConnectionState::Disconnected
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransportEvent {
+    Connected { transport_type: TransportType, session_id: String },
+    Disconnected { transport_type: TransportType, session_id: String, reason: String },
+    MessageSent { transport_type: TransportType, message_type: MessageType, size: usize },
+    MessageReceived { transport_type: TransportType, message_type: MessageType, size: usize },
+    Error { transport_type: TransportType, error: String },
+    Reconnecting { transport_type: TransportType, attempt: u32 },
+    Failover { from_transport: TransportType, to_transport: TransportType },
+}
+
+// Legacy transport kind for backward compatibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportKind {
     WebSocket,

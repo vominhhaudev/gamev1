@@ -1,4 +1,4 @@
-use worker::{WorkerConfig, simulation::SimulationWorld, database::PocketBaseClient};
+use worker::{WorkerConfig, simulation::{GameWorld, spawn_test_entities}, database::PocketBaseClient};
 use common_net::telemetry;
 use std::time::{Duration, Instant};
 use tokio::time;
@@ -45,15 +45,22 @@ async fn main() {
         tracing::warn!(%err, "PocketBase authentication failed - continuing without auth");
     }
 
-    // Create simulation world
-    let mut simulation = SimulationWorld::new();
-    tracing::info!("Simulation world created with {} entities", simulation.entities.len());
+    // Create game world với ECS và Physics
+    let mut game_world = GameWorld::new();
+
+    // Spawn test entities
+    spawn_test_entities(&mut game_world);
+    tracing::info!("Game world created with ECS and Physics");
 
     // Fixed timestep: 60 FPS (16.67ms per frame)
     let target_frame_time = Duration::from_millis(16);
     let mut accumulator = Duration::from_secs(0);
     let mut last_time = Instant::now();
     let mut frame_start_time = Instant::now();
+
+    // Giới hạn số frames tối đa có thể chạy trong một lần lặp để tránh quá tải
+    const MAX_FRAMES_PER_CYCLE: u32 = 10;
+    const MIN_FRAME_TIME: Duration = Duration::from_millis(10); // Minimum 10ms per frame
 
     // Start gRPC server in background
     let _grpc_handle = tokio::spawn(async move {
@@ -62,10 +69,11 @@ async fn main() {
         }
     });
 
-    tracing::info!("Worker simulation started with 60Hz fixed timestep");
+    tracing::info!("Worker simulation started with 60Hz fixed timestep (max {} frames per cycle)", MAX_FRAMES_PER_CYCLE);
     tracing::info!("Database sync every {} frames ({} seconds)", DB_SYNC_INTERVAL, DB_SYNC_INTERVAL / 60);
-    tracing::info!("Frame logging: enabled for all frames");
-    tracing::info!("Performance monitoring: enabled every {} frames", 60);
+    tracing::info!("Minimum frame time: {}ms to prevent CPU overload", MIN_FRAME_TIME.as_millis());
+    tracing::info!("Performance monitoring: every 300 frames (5 seconds)");
+    tracing::info!("Snapshot logging: every 600 frames (10 seconds)");
 
     loop {
         frame_start_time = Instant::now();
@@ -75,22 +83,20 @@ async fn main() {
 
         accumulator += delta_time;
 
-        // Fixed timestep loop
-        while accumulator >= target_frame_time {
+        // Fixed timestep loop với giới hạn số frames tối đa
+        let mut frames_this_cycle = 0;
+        while accumulator >= target_frame_time && frames_this_cycle < MAX_FRAMES_PER_CYCLE {
             let frame_count = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            frames_this_cycle += 1;
 
-            // Step simulation
+            // Step game simulation với ECS và Physics
             let sim_start = Instant::now();
-            simulation.step(target_frame_time);
+            let snapshot = game_world.tick();
             let sim_time = sim_start.elapsed();
 
-            // Minimal operations in main game loop to avoid blocking
-            // Just increment counters - no logging or I/O in main loop
-
-            // Send snapshot to clients (placeholder) - only if entities exist
-            if simulation.entities.len() > 0 {
-                // Just increment counter for now - no actual snapshot creation in main loop
-                // In real implementation, this would be handled by a separate task
+            // Send snapshot to clients (placeholder) - chỉ tick nếu có entities
+            if frame_count % 600 == 0 && !snapshot.entities.is_empty() { // Log mỗi 10 giây
+                tracing::debug!("Game snapshot: {} entities at tick {}", snapshot.entities.len(), snapshot.tick);
             }
 
             // Periodic database sync (every DB_SYNC_INTERVAL frames) - just increment counter
@@ -101,8 +107,14 @@ async fn main() {
             accumulator -= target_frame_time;
         }
 
-        // Performance monitoring every 60 frames (display more frequently for testing)
-        if FRAME_COUNT.load(Ordering::Relaxed) % 60 == 0 {
+        // Nếu không có entities nào, giảm tần suất simulation để tiết kiệm tài nguyên
+        if game_world.get_snapshot().entities.is_empty() && accumulator < target_frame_time {
+            // Sleep lâu hơn khi không có game nào đang chạy
+            time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Performance monitoring every 300 frames (5 seconds at 60fps) to reduce spam
+        if FRAME_COUNT.load(Ordering::Relaxed) % 300 == 0 {
             let (cache_hits, cache_misses, db_queries, db_errors, avg_query_time) =
                 db_client.get_performance_metrics();
             let (games_cached, players_cached, sessions_cached) = db_client.get_cache_stats();
@@ -124,18 +136,17 @@ async fn main() {
             );
         }
 
-        // Simple frame timing - maintain consistent 60fps
+        // Frame timing với giới hạn tối thiểu để tránh quá tải CPU
         let frame_time = frame_start_time.elapsed();
-        let target_frame_time = Duration::from_millis(16);
 
-        // Only sleep if we're significantly ahead of schedule
-        if frame_time < Duration::from_millis(14) {
-            // Sleep for a shorter time to avoid blocking too much
-            tokio::time::sleep(Duration::from_millis(2)).await;
+        // Đảm bảo mỗi frame ít nhất MIN_FRAME_TIME để tránh quá tải
+        if frame_time < MIN_FRAME_TIME {
+            let sleep_time = MIN_FRAME_TIME - frame_time;
+            tokio::time::sleep(sleep_time).await;
         }
 
-        // Performance monitoring every 300 frames (more frequent for better visibility)
-        if FRAME_COUNT.load(Ordering::Relaxed) % 300 == 0 {
+        // Performance monitoring every 600 frames (10 seconds at 60fps) - less frequent to reduce spam
+        if FRAME_COUNT.load(Ordering::Relaxed) % 600 == 0 {
             let (cache_hits, cache_misses, db_queries, db_errors, avg_query_time) =
                 db_client.get_performance_metrics();
             let (games_cached, players_cached, sessions_cached) = db_client.get_cache_stats();

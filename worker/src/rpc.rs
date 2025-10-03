@@ -13,17 +13,24 @@ use tonic::{
 };
 use tracing::{error, info, warn};
 
-use crate::simulation_metrics;
+use crate::{simulation::{GameWorld, PlayerInput}, simulation_metrics};
 
-#[derive(Default)]
 pub struct WorkerState {
-    rooms: RwLock<HashMap<String, RoomInfo>>,
+    game_world: RwLock<GameWorld>,
 }
 
-#[derive(Debug, Default)]
-struct RoomInfo {
-    tick: u64,
-    players: std::collections::HashSet<String>,
+impl WorkerState {
+    pub fn new() -> Self {
+        Self {
+            game_world: RwLock::new(GameWorld::new()),
+        }
+    }
+}
+
+impl Default for WorkerState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone)]
@@ -42,28 +49,36 @@ impl Worker for WorkerService {
         &self,
         request: tonic::Request<JoinRoomRequest>,
     ) -> Result<Response<JoinRoomResponse>, Status> {
-        let room_id = request.into_inner().room_id;
+        let req = request.into_inner();
+        let room_id = req.room_id.clone();
+        let player_id = req.player_id.clone();
 
-        // mock player set
-        let active_players = {
-            let mut rooms = self.state.rooms.write().await;
-            let entry = rooms.entry(room_id.clone()).or_default();
-            entry.tick = 0;
-            entry.players.insert("unknown-player".to_string());
-            rooms.values().map(|r| r.players.len()).sum::<usize>()
-        };
-        simulation_metrics().set_active_players(active_players as i64);
+        info!(%room_id, %player_id, "worker: player joining room");
 
-        info!(%room_id, "worker: join");
+        let mut game_world = self.state.game_world.write().await;
 
-        let snapshot = Snapshot {
-            tick: 0,
-            payload_json: json::empty_snapshot().to_string(),
-        };
+        // Add player vào game world
+        let player_entity = game_world.add_player(player_id.clone());
+
+        // Create initial snapshot
+        let snapshot = game_world.create_snapshot();
+
+        // Update metrics
+        let active_players = 1; // For now, just count this player
+        simulation_metrics().set_active_players(active_players);
+
+        info!(%room_id, %player_id, "worker: player joined successfully");
+
+        let snapshot_json = serde_json::to_string(&snapshot)
+            .unwrap_or_else(|_| json::empty_snapshot().to_string());
+
         Ok(Response::new(JoinRoomResponse {
             ok: true,
             room_id,
-            snapshot: Some(snapshot),
+            snapshot: Some(Snapshot {
+                tick: snapshot.tick,
+                payload_json: snapshot_json,
+            }),
             error: String::new(),
         }))
     }
@@ -72,18 +87,14 @@ impl Worker for WorkerService {
         &self,
         request: tonic::Request<LeaveRoomRequest>,
     ) -> Result<Response<LeaveRoomResponse>, Status> {
-        let room_id = request.into_inner().room_id;
+        let req = request.into_inner();
+        let room_id = req.room_id;
 
-        let active_players = {
-            let mut rooms = self.state.rooms.write().await;
-            if let Some(entry) = rooms.get_mut(&room_id) {
-                entry.players.clear();
-            }
-            rooms.values().map(|r| r.players.len()).sum::<usize>()
-        };
-        simulation_metrics().set_active_players(active_players as i64);
+        // For now, just update metrics (in real implementation would remove player entity)
+        let active_players = 0; // Simplified for MVP
+        simulation_metrics().set_active_players(active_players);
 
-        info!(%room_id, "worker: leave");
+        info!(%room_id, "worker: player left room");
         Ok(Response::new(LeaveRoomResponse {
             ok: true,
             room_id,
@@ -97,34 +108,52 @@ impl Worker for WorkerService {
     ) -> Result<Response<PushInputResponse>, Status> {
         let req = request.into_inner();
 
-        let tick_opt = {
-            let mut rooms = self.state.rooms.write().await;
-            rooms.get_mut(&req.room_id).map(|info| {
-                info.tick += 1;
-                info.tick
-            })
+        info!(room_id = %req.room_id, sequence = %req.sequence, "worker: processing input");
+
+        let mut game_world = self.state.game_world.write().await;
+
+        // Parse input từ JSON
+        let input: PlayerInput = match serde_json::from_str(&req.payload_json) {
+            Ok(input) => input,
+            Err(e) => {
+                warn!("Failed to parse player input: {}", e);
+                return Ok(Response::new(PushInputResponse {
+                    ok: false,
+                    room_id: req.room_id,
+                    snapshot: None,
+                    error: format!("invalid_input: {}", e),
+                }));
+            }
         };
 
-        let Some(tick) = tick_opt else {
-            warn!(room_id = %req.room_id, "worker: input for unknown room");
-            return Ok(Response::new(PushInputResponse {
-                ok: false,
-                room_id: req.room_id,
-                snapshot: None,
-                error: "room_not_found".into(),
-            }));
-        };
+        // For MVP, assume player_id from input JSON is valid
+        // In real implementation, would validate against PlayerEntityMap
 
-        let snapshot_payload = json::input_snapshot(tick, req.sequence, &req.payload_json);
-        let snapshot = Snapshot {
-            tick,
-            payload_json: snapshot_payload,
-        };
+        // Add input vào buffer
+        game_world.input_buffers
+            .entry(input.player_id.clone())
+            .or_insert_with(|| crate::simulation::InputBuffer::new())
+            .add_input(input);
+
+        // Run game tick để process input
+        game_world.tick();
+
+        // Get current snapshot
+        let snapshot = game_world.get_snapshot();
+
+        // Serialize snapshot
+        let snapshot_json = serde_json::to_string(&snapshot)
+            .unwrap_or_else(|_| json::empty_snapshot().to_string());
+
+        info!(room_id = %req.room_id, tick = %snapshot.tick, "worker: input processed, snapshot generated");
 
         Ok(Response::new(PushInputResponse {
             ok: true,
             room_id: req.room_id,
-            snapshot: Some(snapshot),
+            snapshot: Some(Snapshot {
+                tick: snapshot.tick,
+                payload_json: snapshot_json,
+            }),
             error: String::new(),
         }))
     }

@@ -6,25 +6,41 @@ use tokio::sync::oneshot;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use axum::{extract::State, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{extract::{State, Path}, response::IntoResponse, routing::{get, post, delete}, Json, Router};
 use hyper::server::conn::AddrIncoming;
 use once_cell::sync::Lazy;
 use prometheus::{register_int_counter_vec, register_int_gauge_vec, Encoder, IntCounterVec, IntGaugeVec, TextEncoder};
 use tracing::error;
+use metrics::{counter, histogram};
 
 use common_net::message::{self, ControlMessage, Frame, FramePayload};
 use common_net::transport::{GameTransport, TransportKind, WebRtcTransport};
 
-// pub mod auth; // Đã đóng băng, loại bỏ hoàn toàn
+pub mod auth;
 pub mod types;
 pub mod worker_client;
 
+use proto::worker::v1::worker_client::WorkerClient;
+
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub signaling: SignalingState,
+    pub signaling_sessions: SignalingSessions,
+    pub ws_registry: WebSocketRegistry,
+    pub transport_registry: TransportRegistry,
+    pub worker_client: WorkerClient<tonic::transport::Channel>,
+    pub auth_config: auth::EmailAuthConfig,
+}
 
 pub const HEALTHZ_PATH: &str = "/healthz";
 pub const VERSION_PATH: &str = "/version";
 pub const METRICS_PATH: &str = "/metrics";
 pub const WS_PATH: &str = "/ws";
+pub const GAME_INPUT_PATH: &str = "/game/input";
+pub const GAME_JOIN_PATH: &str = "/game/join";
+pub const GAME_LEAVE_PATH: &str = "/game/leave";
 
 static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
@@ -150,6 +166,7 @@ pub struct RtcIceCandidate {
 }
 
 type SignalingState = Arc<RwLock<HashMap<String, RoomSignaling>>>;
+type SignalingSessions = Arc<RwLock<HashMap<String, crate::types::SignalingSession>>>;
 
 #[derive(Debug)]
 pub struct WebSocketConnection {
@@ -158,7 +175,7 @@ pub struct WebSocketConnection {
     pub sender: tokio::sync::mpsc::UnboundedSender<axum::extract::ws::Message>,
 }
 
-type WebSocketRegistry = Arc<RwLock<HashMap<String, WebSocketConnection>>>; // key: connection_id
+pub type WebSocketRegistry = Arc<RwLock<HashMap<String, WebSocketConnection>>>; // key: connection_id
 
 pub struct TransportConnection {
     pub peer_id: String,
@@ -178,14 +195,14 @@ impl std::fmt::Debug for TransportConnection {
     }
 }
 
-type TransportRegistry = Arc<RwLock<HashMap<String, TransportConnection>>>; // key: connection_id
+pub type TransportRegistry = Arc<RwLock<HashMap<String, TransportConnection>>>; // key: connection_id
 
 // Handler cho /rtc/offer (có state)
 async fn handle_rtc_offer(
-    State(state): State<SignalingState>,
+    State(state): State<AppState>,
     Json(req): Json<RtcOfferRequest>,
 ) -> Json<RtcOfferResponse> {
-    let mut map = state.write().await;
+    let mut map = state.signaling.write().await;
     let room = map.entry(req.room_id.clone()).or_default();
     let peer = room.peers.entry(req.peer_id.clone()).or_insert_with(|| PeerConnection::new(req.peer_id.clone()));
     peer.offer = Some(req.sdp.clone());
@@ -196,10 +213,10 @@ async fn handle_rtc_offer(
 
 // Handler cho /rtc/ice (có state)
 async fn handle_rtc_ice(
-    State(state): State<SignalingState>,
+    State(state): State<AppState>,
     Json(ice): Json<RtcIceCandidate>,
 ) -> axum::http::StatusCode {
-    let mut map = state.write().await;
+    let mut map = state.signaling.write().await;
     let room = map.entry(ice.room_id.clone()).or_default();
     let peer = room.peers.entry(ice.peer_id.clone()).or_insert_with(|| PeerConnection::new(ice.peer_id.clone()));
     peer.ice_candidates.push(ice);
@@ -208,10 +225,10 @@ async fn handle_rtc_ice(
 
 // Handler cho /rtc/answer (có state)
 async fn handle_rtc_answer(
-    State(state): State<SignalingState>,
+    State(state): State<AppState>,
     Json(req): Json<RtcAnswerRequest>,
 ) -> axum::http::StatusCode {
-    let mut map = state.write().await;
+    let mut map = state.signaling.write().await;
     if let Some(room) = map.get_mut(&req.room_id) {
         if let Some(target_peer) = room.peers.get_mut(&req.target_peer_id) {
             target_peer.answer = Some(req.sdp);
@@ -222,22 +239,163 @@ async fn handle_rtc_answer(
     axum::http::StatusCode::NOT_FOUND
 }
 
-pub fn build_router(_worker_endpoint: &str) -> Result<Router, BoxError> {
+pub async fn build_router(worker_endpoint: String) -> Router {
     let signaling_state: SignalingState = Arc::new(RwLock::new(HashMap::new()));
+    let signaling_sessions: SignalingSessions = Arc::new(RwLock::new(HashMap::new()));
     let ws_registry: WebSocketRegistry = Arc::new(RwLock::new(HashMap::new()));
     let transport_registry: TransportRegistry = Arc::new(RwLock::new(HashMap::new()));
+    let auth_config = auth::EmailAuthConfig::from_env();
 
-    Ok(Router::new()
+    // Create worker client
+    let worker_client = match WorkerClient::connect(worker_endpoint.clone()).await {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!("Failed to connect to worker, will retry on demand: {}", e);
+            match WorkerClient::connect(worker_endpoint.clone()).await {
+                Ok(client) => client,
+                Err(_) => {
+                    // Fallback: create a dummy client that will fail on use
+                    match WorkerClient::connect("http://127.0.0.1:1").await {
+                        Ok(client) => client,
+                        Err(_) => {
+                            panic!("Cannot create fallback worker client")
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let state = AppState {
+        signaling: signaling_state,
+        signaling_sessions,
+        ws_registry,
+        transport_registry,
+        worker_client,
+        auth_config,
+    };
+
+    Router::new()
         .route(HEALTHZ_PATH, get(healthz))
         .route(VERSION_PATH, get(version))
         .route(METRICS_PATH, get(metrics))
-        .route(WS_PATH, get(move |ws| ws_handler(ws, ws_registry.clone(), transport_registry.clone())))
+        .route(WS_PATH, get(ws_handler))
+        .route("/auth/login", post(auth_login))
+        .route("/auth/refresh", post(auth_refresh))
+        .route("/inputs", post(post_inputs))
         .route("/rtc/offer", post(handle_rtc_offer))
         .route("/rtc/answer", post(handle_rtc_answer))
         .route("/rtc/ice", post(handle_rtc_ice))
+        .route("/rtc/sessions", get(list_webrtc_sessions))
+        .route("/rtc/sessions/:session_id", delete(close_webrtc_session))
         .route("/test", get(test_handler))
-        .with_state(signaling_state)
-    )
+        .route(GAME_JOIN_PATH, post(game_join_handler))
+        .route(GAME_LEAVE_PATH, post(game_leave_handler))
+        .route(GAME_INPUT_PATH, post(game_input_handler))
+        .with_state(state)
+}
+
+// List WebRTC sessions for user
+async fn list_webrtc_sessions(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let user_id = "temp_user_id"; // TODO: Extract from JWT
+
+    let sessions: Vec<_> = {
+        let sessions_map = state.signaling_sessions.read().await;
+        sessions_map.values()
+            .filter(|s| s.user_id == user_id)
+            .cloned()
+            .collect()
+    };
+
+    Json(serde_json::json!({
+        "sessions": sessions,
+        "total": sessions.len()
+    }))
+}
+
+// Close WebRTC session
+async fn close_webrtc_session(
+    State(mut state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let user_id = "temp_user_id"; // TODO: Extract from JWT
+
+    {
+        let mut sessions = state.signaling_sessions.write().await;
+        if let Some(session) = sessions.get(&session_id) {
+            if session.user_id == user_id {
+                sessions.remove(&session_id);
+                counter!("gw.webrtc.sessions_closed").increment(1);
+                return Json(serde_json::json!({"status": "session_closed"}));
+            }
+        }
+    }
+
+    Json(serde_json::json!({"error": "Session not found"}))
+}
+
+// Auth handlers
+async fn auth_login(
+    State(state): State<AppState>,
+    Json(login_req): Json<auth::EmailLoginRequest>,
+) -> impl IntoResponse {
+    match auth::email_login_handler(&state.auth_config, login_req).await {
+        Ok(response) => {
+            counter!("gw.auth.login.success").increment(1);
+            Json::<auth::EmailAuthResponse>(response).into_response()
+        }
+        Err(e) => {
+            counter!("gw.auth.login.failed").increment(1);
+            error!("Login failed: {}", e);
+            (axum::http::StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
+        }
+    }
+}
+
+async fn auth_refresh(
+    State(state): State<AppState>,
+    Json(refresh_req): Json<auth::RefreshTokenRequest>,
+) -> impl IntoResponse {
+    match auth::email_refresh_handler(&state.auth_config, refresh_req).await {
+        Ok(response) => {
+            counter!("gw.auth.refresh.success").increment(1);
+            Json::<auth::EmailAuthResponse>(response).into_response()
+        }
+        Err(e) => {
+            counter!("gw.auth.refresh.failed").increment(1);
+            error!("Token refresh failed: {}", e);
+            (axum::http::StatusCode::UNAUTHORIZED, "Invalid refresh token").into_response()
+        }
+    }
+}
+
+// Game input handler
+async fn post_inputs(
+    State(mut state): State<AppState>,
+    Json(body): Json<types::InputReq>,
+) -> impl IntoResponse {
+    let t0 = std::time::Instant::now();
+
+    let req = proto::worker::v1::PushInputRequest {
+        room_id: body.room_id,
+        sequence: body.seq as u32,
+        payload_json: body.payload_json,
+    };
+
+    match state.worker_client.push_input(req).await {
+        Ok(_) => {
+            histogram!("gw.inputs.push_ms").record(t0.elapsed().as_secs_f64() * 1000.0);
+            counter!("gw.inputs.ok").increment(1);
+            axum::http::StatusCode::OK
+        }
+        Err(e) => {
+            error!(error=?e, "push_input failed");
+            counter!("gw.inputs.err").increment(1);
+            axum::http::StatusCode::BAD_GATEWAY
+        }
+    }
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -281,10 +439,9 @@ async fn metrics() -> impl IntoResponse {
 
 async fn ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
-    ws_registry: WebSocketRegistry,
-    transport_registry: TransportRegistry,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| ws_session(socket, ws_registry, transport_registry))
+    ws.on_upgrade(|socket| ws_session(socket, state.ws_registry, state.transport_registry))
 }
 
 async fn ws_session(
@@ -567,7 +724,7 @@ pub async fn run(
         let _ = tx.send(local_addr);
     }
 
-    let app = build_router(&config.worker_endpoint)?;
+    let app = build_router(config.worker_endpoint.clone()).await;
     let server = tokio::spawn(async move {
         let incoming = AddrIncoming::from_listener(listener).expect("failed to create incoming");
         if let Err(err) = hyper::Server::builder(incoming)
@@ -581,6 +738,134 @@ pub async fn run(
     common_net::shutdown::wait(shutdown_rx).await;
     server.abort();
     Ok(())
+}
+
+// Game handlers
+async fn game_join_handler(
+    State(mut state): State<AppState>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[GAME_JOIN_PATH]).inc();
+
+    let room_id = request.get("room_id").and_then(|v| v.as_str()).unwrap_or("default");
+    let player_id = request.get("player_id").and_then(|v| v.as_str()).unwrap_or("anonymous");
+
+    tracing::info!(room_id, player_id, "gateway: player joining game");
+
+    // Call worker to join room
+    match state.worker_client.join_room(proto::worker::v1::JoinRoomRequest {
+        room_id: room_id.to_string(),
+        player_id: player_id.to_string(),
+    }).await {
+        Ok(response) => {
+            let response_inner = response.into_inner();
+            if response_inner.ok {
+                tracing::info!(room_id, player_id, "gateway: player joined game successfully");
+                Json(serde_json::json!({
+                    "success": true,
+                    "room_id": room_id,
+                    "player_id": player_id,
+                    "snapshot": response_inner.snapshot.map(|s| s.payload_json).unwrap_or_else(|| "{}".to_string())
+                })).into_response()
+            } else {
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Failed to join room"
+                })).into_response()
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "gateway: failed to join room");
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Worker error: {}", e)
+            })).into_response()
+        }
+    }
+}
+
+async fn game_leave_handler(
+    State(mut state): State<AppState>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[GAME_LEAVE_PATH]).inc();
+
+    let room_id = request.get("room_id").and_then(|v| v.as_str()).unwrap_or("default");
+    let player_id = request.get("player_id").and_then(|v| v.as_str()).unwrap_or("anonymous");
+
+    tracing::info!(room_id, player_id, "gateway: player leaving game");
+
+    // Call worker to leave room
+    match state.worker_client.leave_room(proto::worker::v1::LeaveRoomRequest {
+        room_id: room_id.to_string(),
+    }).await {
+        Ok(response) => {
+            if response.into_inner().ok {
+                tracing::info!(room_id, player_id, "gateway: player left game successfully");
+                Json(serde_json::json!({
+                    "success": true,
+                    "room_id": room_id,
+                    "player_id": player_id
+                })).into_response()
+            } else {
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Failed to leave room"
+                })).into_response()
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "gateway: failed to leave room");
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Worker error: {}", e)
+            })).into_response()
+        }
+    }
+}
+
+async fn game_input_handler(
+    State(mut state): State<AppState>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[GAME_INPUT_PATH]).inc();
+
+    let room_id = request.get("room_id").and_then(|v| v.as_str()).unwrap_or("default");
+    let player_id = request.get("player_id").and_then(|v| v.as_str()).unwrap_or("anonymous");
+    let sequence = request.get("sequence").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let input_json = request.get("input").map(|v| v.to_string()).unwrap_or_default();
+
+    tracing::debug!(room_id, player_id, sequence, "gateway: processing game input");
+
+    // Call worker to push input
+    match state.worker_client.push_input(proto::worker::v1::PushInputRequest {
+        room_id: room_id.to_string(),
+        sequence,
+        payload_json: input_json,
+    }).await {
+        Ok(response) => {
+            let response_inner = response.into_inner();
+            if response_inner.ok {
+                tracing::debug!(room_id, player_id, sequence, tick = %response_inner.snapshot.as_ref().map(|s| s.tick).unwrap_or(0), "gateway: input processed");
+                Json(serde_json::json!({
+                    "success": true,
+                    "snapshot": response_inner.snapshot.map(|s| s.payload_json).unwrap_or_else(|| "{}".to_string())
+                })).into_response()
+            } else {
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": response_inner.error
+                })).into_response()
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "gateway: failed to push input");
+            Json(serde_json::json!({
+                "success": false,
+                "error": format!("Worker error: {}", e)
+            })).into_response()
+        }
+    }
 }
 
 impl GatewayConfig {

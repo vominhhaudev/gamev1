@@ -1,7 +1,6 @@
 {
-  "extends": "@sveltejs/kit/tsconfig",
+  "extends": "./.svelte-kit/tsconfig.json",
   "compilerOptions": {
-    "baseUrl": "."
   },
   "include": [
     "src/**/*",

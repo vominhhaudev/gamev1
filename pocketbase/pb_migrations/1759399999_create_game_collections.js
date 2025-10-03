@@ -83,7 +83,41 @@ migrate((app) => {
     "deleteRule": ""
   });
 
-  // 3. Create Game Sessions Collection
+  // 3. Create Users Collection (Auth Collection)
+  const usersCollection = new Collection({
+    "name": "users",
+    "type": "auth",
+    "system": false,
+    "schema": [
+      {
+        "name": "name",
+        "type": "text",
+        "required": false,
+        "options": {
+          "min": 1,
+          "max": 100
+        }
+      },
+      {
+        "name": "avatar",
+        "type": "file",
+        "required": false,
+        "options": {
+          "maxSelect": 1,
+          "maxSize": 5242880,
+          "mimeTypes": ["image/jpeg", "image/png", "image/gif"],
+          "thumbs": ["100x100"]
+        }
+      }
+    ],
+    "listRule": "id = @request.auth.id",
+    "viewRule": "id = @request.auth.id",
+    "createRule": "",
+    "updateRule": "id = @request.auth.id",
+    "deleteRule": "id = @request.auth.id"
+  });
+
+  // 4. Create Game Sessions Collection
   const sessionsCollection = new Collection({
     "name": "game_sessions",
     "type": "base",
@@ -105,7 +139,7 @@ migrate((app) => {
         "type": "relation",
         "required": true,
         "options": {
-          "collectionId": playersCollection.id,
+          "collectionId": usersCollection.id,
           "cascadeDelete": true,
           "minSelect": 1,
           "maxSelect": 1
@@ -147,15 +181,18 @@ migrate((app) => {
   // Save all collections
   app.save(gamesCollection);
   app.save(playersCollection);
+  app.save(usersCollection);
   app.save(sessionsCollection);
 }, (app) => {
   // Rollback: Delete collections
   const games = app.findCollectionByNameOrId("games");
   const players = app.findCollectionByNameOrId("players");
+  const users = app.findCollectionByNameOrId("users");
   const sessions = app.findCollectionByNameOrId("game_sessions");
 
   if (games) app.delete(games);
   if (players) app.delete(players);
+  if (users) app.delete(users);
   if (sessions) app.delete(sessions);
 });
 

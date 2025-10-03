@@ -1,11 +1,12 @@
 export type TransportKind = 'webtransport' | 'webrtc' | 'websocket';
 
-export type TransportHandle = {
+export interface TransportHandle {
   kind: TransportKind;
   socket: WebSocket;
   authToken?: string;
   authExpiresIn?: number;
-};
+  externalAuthToken?: string; // Token từ bên ngoài (auth store)
+}
 
 const DEFAULT_ORDER: TransportKind[] = ['webtransport', 'webrtc', 'websocket'];
 
@@ -34,6 +35,7 @@ interface NegotiationPlan {
 export async function selectTransport(options?: {
   order?: TransportKind[];
   websocketEndpoint?: string;
+  authToken?: string;
 }): Promise<TransportHandle> {
   const fallbackWsEndpoint = options?.websocketEndpoint ?? 'ws://127.0.0.1:3000/ws';
   const wsUrl = safeParseUrl(fallbackWsEndpoint);
@@ -59,7 +61,7 @@ export async function selectTransport(options?: {
             wsUrl,
             fallbackWsEndpoint
           );
-          const handle = await connectWebSocket(endpoint);
+          const handle = await connectWebSocket(endpoint, options?.authToken);
           if (negotiationPlan?.auth) {
             return {
               ...handle,
@@ -179,7 +181,7 @@ function safeParseUrl(value: string | undefined | null): URL | null {
   }
 }
 
-async function connectWebSocket(endpoint: string): Promise<TransportHandle> {
+async function connectWebSocket(endpoint: string, externalAuthToken?: string): Promise<TransportHandle> {
   const socket = new WebSocket(endpoint);
   await new Promise<void>((resolve, reject) => {
     const onOpen = () => {
@@ -201,6 +203,7 @@ async function connectWebSocket(endpoint: string): Promise<TransportHandle> {
   return {
     kind: 'websocket',
     socket,
+    externalAuthToken,
   };
 }
 

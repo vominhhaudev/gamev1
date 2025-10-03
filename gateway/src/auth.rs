@@ -1,5 +1,11 @@
 //! Authentication utilities for wallet signature verification and JWT handling.
 
+use axum::{
+    body::Body,
+    http::{header::AUTHORIZATION, StatusCode, Request},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{Duration, Utc};
 use ed25519_dalek::{
@@ -14,6 +20,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tracing::{error, info};
 use uuid::Uuid;
 
 #[cfg(feature = "wallet_disabled")]
@@ -359,6 +366,221 @@ impl NonceManager {
     }
 }
 
+// ===== EMAIL/PASSWORD AUTHENTICATION =====
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmailLoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmailAuthResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: i64,
+    pub user_id: String,
+    pub email: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmailAuthConfig {
+    pub jwt_secret: String,
+    pub refresh_secret: String,
+    pub access_token_expiry: i64,  // seconds
+    pub refresh_token_expiry: i64, // seconds
+}
+
+impl EmailAuthConfig {
+    pub fn from_env() -> Self {
+        Self {
+            jwt_secret: std::env::var("JWT_SECRET")
+                .unwrap_or_else(|_| "your-secret-key-change-this-in-production".to_string()),
+            refresh_secret: std::env::var("REFRESH_SECRET")
+                .unwrap_or_else(|_| "your-refresh-secret-key-change-this-in-production".to_string()),
+            access_token_expiry: std::env::var("ACCESS_TOKEN_EXPIRY")
+                .unwrap_or_else(|_| "900".to_string()) // 15 minutes
+                .parse()
+                .unwrap_or(900),
+            refresh_token_expiry: std::env::var("REFRESH_TOKEN_EXPIRY")
+                .unwrap_or_else(|_| "604800".to_string()) // 7 days
+                .parse()
+                .unwrap_or(604800),
+        }
+    }
+
+    pub fn generate_access_token(&self, user_id: &str, email: &str, session_id: &str) -> Result<String, AuthError> {
+        let now = Utc::now();
+        let expire = now + Duration::seconds(self.access_token_expiry);
+
+        let claims = EmailClaims {
+            sub: user_id.to_string(),
+            email: email.to_string(),
+            exp: expire.timestamp() as usize,
+            iat: now.timestamp() as usize,
+            session_id: session_id.to_string(),
+        };
+
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(self.jwt_secret.as_bytes()),
+        )
+        .map_err(|err| AuthError::JwtEncodingError(err.to_string()))
+    }
+
+    pub fn generate_refresh_token(&self, user_id: &str, session_id: &str) -> Result<String, AuthError> {
+        let now = Utc::now();
+        let expire = now + Duration::seconds(self.refresh_token_expiry);
+
+        let claims = EmailClaims {
+            sub: user_id.to_string(),
+            email: "".to_string(),
+            exp: expire.timestamp() as usize,
+            iat: now.timestamp() as usize,
+            session_id: session_id.to_string(),
+        };
+
+        jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
+            &claims,
+            &jsonwebtoken::EncodingKey::from_secret(self.refresh_secret.as_bytes()),
+        )
+        .map_err(|err| AuthError::JwtEncodingError(err.to_string()))
+    }
+
+    pub fn validate_access_token(&self, token: &str) -> Result<EmailClaims, AuthError> {
+        jsonwebtoken::decode::<EmailClaims>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(self.jwt_secret.as_bytes()),
+            &jsonwebtoken::Validation::default(),
+        )
+        .map(|data| data.claims)
+        .map_err(|err| match err.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
+            _ => AuthError::JwtDecodingError(err.to_string()),
+        })
+    }
+
+    pub fn validate_refresh_token(&self, token: &str) -> Result<EmailClaims, AuthError> {
+        jsonwebtoken::decode::<EmailClaims>(
+            token,
+            &jsonwebtoken::DecodingKey::from_secret(self.refresh_secret.as_bytes()),
+            &jsonwebtoken::Validation::default(),
+        )
+        .map(|data| data.claims)
+        .map_err(|err| match err.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => AuthError::TokenExpired,
+            _ => AuthError::JwtDecodingError(err.to_string()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailClaims {
+    pub sub: String, // user_id
+    pub email: String,
+    pub exp: usize,
+    pub iat: usize,
+    pub session_id: String,
+}
+
+// Real authentication với PocketBase
+pub async fn authenticate_email_password(email: &str, password: &str) -> Result<(String, String), AuthError> {
+    // Initialize PocketBase client
+    let pocketbase_url = std::env::var("POCKETBASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8090".to_string());
+
+    let pb_client = pocketbase::PocketBaseClient::new(&pocketbase_url);
+
+    // Authenticate user with PocketBase
+    match pb_client.auth_user(email, password).await {
+        Ok(auth_record) => {
+            // Extract user ID from the record
+            let user_id = auth_record.record.id;
+            let user_email = email.to_string();
+
+            info!("User authenticated successfully: {} (ID: {})", user_email, user_id);
+            Ok((user_id, user_email))
+        }
+        Err(e) => {
+            error!("PocketBase authentication failed for {}: {}", email, e);
+            Err(AuthError::InvalidToken)
+        }
+    }
+}
+
+pub async fn email_login_handler(
+    config: &EmailAuthConfig,
+    login_req: EmailLoginRequest,
+) -> Result<EmailAuthResponse, AuthError> {
+    let (user_id, email) = authenticate_email_password(&login_req.email, &login_req.password).await?;
+
+    let session_id = Uuid::new_v4().to_string();
+    let access_token = config.generate_access_token(&user_id, &email, &session_id)?;
+    let refresh_token = config.generate_refresh_token(&user_id, &session_id)?;
+
+    Ok(EmailAuthResponse {
+        access_token,
+        refresh_token,
+        expires_in: config.access_token_expiry,
+        user_id,
+        email,
+    })
+}
+
+pub async fn email_refresh_handler(
+    config: &EmailAuthConfig,
+    refresh_req: RefreshTokenRequest,
+) -> Result<EmailAuthResponse, AuthError> {
+    let claims = config.validate_refresh_token(&refresh_req.refresh_token)?;
+
+    let session_id = claims.session_id;
+    let user_id = claims.sub;
+
+    let access_token = config.generate_access_token(&user_id, "", &session_id)?;
+    let refresh_token = config.generate_refresh_token(&user_id, &session_id)?;
+
+    Ok(EmailAuthResponse {
+        access_token,
+        refresh_token,
+        expires_in: config.access_token_expiry,
+        user_id,
+        email: "".to_string(),
+    })
+}
+
+/// Middleware để validate email/password JWT token
+pub async fn email_auth_middleware(
+    config: EmailAuthConfig,
+    mut request: Request<Body>,
+    next: Next<Body>,
+) -> Response {
+    let auth_header = request.headers().get(AUTHORIZATION).and_then(|h| h.to_str().ok());
+
+    if let Some(auth_str) = auth_header {
+        if let Some(token) = auth_str.strip_prefix("Bearer ") {
+            match config.validate_access_token(token) {
+                Ok(claims) => {
+                    // Token hợp lệ, thêm thông tin user vào request extensions
+                    request.extensions_mut().insert(claims);
+                    return next.run(request).await;
+                }
+                Err(e) => {
+                    tracing::warn!("Invalid JWT token: {}", e);
+                }
+            }
+        }
+    }
+
+    (StatusCode::UNAUTHORIZED, "Missing or invalid authorization token").into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,5 +596,27 @@ mod tests {
         let kp = TestKeypair::generate();
         assert!(WalletVerifier::validate_solana_address(&kp.wallet_address).is_ok());
         assert!(WalletVerifier::validate_solana_address("invalid").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_email_auth_config() {
+        let config = EmailAuthConfig::from_env();
+        let user_id = "test_user";
+        let email = "test@example.com";
+        let session_id = "test_session";
+
+        let access_token = config.generate_access_token(user_id, email, session_id).unwrap();
+        let refresh_token = config.generate_refresh_token(user_id, session_id).unwrap();
+
+        assert!(!access_token.is_empty());
+        assert!(!refresh_token.is_empty());
+
+        // Test validation
+        let claims = config.validate_access_token(&access_token).unwrap();
+        assert_eq!(claims.sub, user_id);
+        assert_eq!(claims.email, email);
+
+        let refresh_claims = config.validate_refresh_token(&refresh_token).unwrap();
+        assert_eq!(refresh_claims.sub, user_id);
     }
 }

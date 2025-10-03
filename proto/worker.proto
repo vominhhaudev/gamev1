@@ -10,6 +10,7 @@ service Worker {
 
 message JoinRoomRequest {
   string room_id = 1;
+  string player_id = 2;
 }
 
 message JoinRoomResponse {

@@ -162,6 +162,10 @@ impl PocketBaseClient {
         }
     }
 
+    pub fn base_url(&self) -> &str {
+        self.base_client.base_url()
+    }
+
     pub async fn authenticate(&mut self, email: &str, password: &str) -> Result<()> {
         match self.base_client.auth_admin(email, password).await {
             Ok(_) => {
