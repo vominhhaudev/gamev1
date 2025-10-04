@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tracing;
 
+use crate::validation::{InputValidator, ValidationConfig, ValidationError};
+
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Components cho gameplay
@@ -26,6 +28,8 @@ pub struct VelocityQ {
 pub struct Player {
     pub id: String,
     pub score: u32,
+    pub view_distance: f32, // Area of Interest radius
+    pub last_position: [f32; 3], // For movement tracking
 }
 
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +68,41 @@ pub struct Enemy {
     pub attack_cooldown: Duration,
 }
 
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub player_id: String,
+    pub player_name: String,
+    pub message: String,
+    pub timestamp: u64,
+    pub message_type: ChatMessageType,
+}
+
+#[derive(Component, Debug, Clone, Serialize, Deserialize)]
+pub struct Spectator {
+    pub id: String,
+    pub target_player_id: Option<String>, // Player đang follow (nếu có)
+    pub camera_mode: SpectatorCameraMode,
+    pub view_distance: f32,
+    pub last_position: [f32; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum SpectatorCameraMode {
+    Free,        // Camera tự do di chuyển
+    Follow,      // Follow theo player cụ thể
+    Overview,    // Camera overview toàn bộ game
+    Fixed,       // Camera cố định tại vị trí
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ChatMessageType {
+    Global,    // Message gửi tới tất cả players
+    Team,      // Message gửi tới team members
+    Whisper,   // Private message tới player cụ thể
+    System,    // System announcement
+}
+
 // Simplified version for serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnemySnapshot {
@@ -86,6 +125,8 @@ pub struct PlayerInput {
 pub struct GameSnapshot {
     pub tick: u64,
     pub entities: Vec<EntitySnapshot>,
+    pub chat_messages: Vec<ChatMessage>,
+    pub spectators: Vec<SpectatorSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +139,15 @@ pub struct EntitySnapshot {
     pub obstacle: Option<Obstacle>,
     pub power_up: Option<PowerUp>,
     pub enemy: Option<EnemySnapshot>, // Simplified version for serialization
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpectatorSnapshot {
+    pub id: String,
+    pub transform: TransformQ,
+    pub camera_mode: String,
+    pub target_player_id: Option<String>,
+    pub view_distance: f32,
 }
 
 /// Simplified simulation world for basic testing
@@ -139,6 +189,8 @@ impl SimulationWorld {
         GameSnapshot {
             tick: self.tick_count,
             entities: self.entities.clone(),
+            chat_messages: Vec::new(), // SimulationWorld doesn't have chat
+            spectators: Vec::new(), // SimulationWorld doesn't have spectators
         }
     }
 }
@@ -189,8 +241,10 @@ pub struct GameWorld {
     pub impulse_joints: ImpulseJointSet,
     pub multibody_joints: MultibodyJointSet,
     pub ccd_solver: CCDSolver,
+    pub chat_messages: Vec<ChatMessage>,
     pub query_pipeline: QueryPipeline,
     pub input_buffers: std::collections::HashMap<String, InputBuffer>,
+    pub input_validator: InputValidator,
     pub last_tick: Instant,
     pub accumulator: Duration,
     pub tick_rate: Duration, // 60Hz = 16.67ms per tick
@@ -234,8 +288,10 @@ impl GameWorld {
             impulse_joints,
             multibody_joints,
             ccd_solver,
+            chat_messages: Vec::new(),
             query_pipeline,
             input_buffers: std::collections::HashMap::new(),
+            input_validator: InputValidator::with_default_config(),
             last_tick: Instant::now(),
             accumulator: Duration::from_secs(0),
             tick_rate: Duration::from_millis(16), // 60Hz
@@ -280,32 +336,96 @@ impl GameWorld {
         snapshots
     }
 
-    /// Get current snapshot without mutating state (for external use)
+    /// Get current snapshot without mutating state (for external use) - deprecated, use get_snapshot_for_player
     pub fn get_snapshot(&mut self) -> GameSnapshot {
-        let mut entities = Vec::new();
+        // Fallback to full snapshot for backward compatibility
+        self.create_snapshot()
+    }
 
-        let mut query = self.world.query::<(Entity, &TransformQ, Option<&VelocityQ>, Option<&Player>, Option<&Pickup>, Option<&Obstacle>, Option<&PowerUp>, Option<&Enemy>)>();
-        for (entity, transform, velocity, player, pickup, obstacle, power_up, enemy) in query.iter(&self.world) {
-            entities.push(EntitySnapshot {
-                id: entity.index(),
-                transform: transform.clone(),
-                velocity: velocity.cloned(),
-                player: player.cloned(),
-                pickup: pickup.cloned(),
-                obstacle: obstacle.cloned(),
-                power_up: power_up.cloned(),
-                enemy: enemy.map(|e| EnemySnapshot {
-                    enemy_type: e.enemy_type.clone(),
-                    damage: e.damage,
-                    speed: e.speed,
-                }),
-            });
+    /// Get current snapshot for a specific player using AOI optimization
+    pub fn get_snapshot_for_player(&mut self, player_id: &str) -> GameSnapshot {
+        let player_position = self.get_player_position(player_id)
+            .unwrap_or([0.0, 5.0, 0.0]);
+        let view_distance = self.get_player_view_distance(player_id)
+            .unwrap_or(50.0); // Default view distance
+
+        // Create AOI-optimized snapshot
+        let mut entities = Vec::new();
+        let mut query = self.world.query::<(Entity, &TransformQ, Option<&Player>, Option<&Pickup>, Option<&Obstacle>, Option<&PowerUp>, Option<&Enemy>)>();
+
+        for (entity, transform, player, pickup, obstacle, power_up, enemy) in query.iter(&self.world) {
+            // Calculate distance from player to entity
+            let entity_pos = vector![transform.position[0], transform.position[1], transform.position[2]];
+            let player_pos_vec = vector![player_position[0], player_position[1], player_position[2]];
+            let distance = (entity_pos - player_pos_vec).magnitude();
+
+            // Include entity if within view distance or if it's the player themselves
+            if distance <= view_distance || (player.is_some() && player.as_ref().unwrap().id == player_id) {
+                entities.push(EntitySnapshot {
+                    id: entity.index(),
+                    transform: transform.clone(),
+                    velocity: self.world.get::<VelocityQ>(entity).cloned(),
+                    player: player.cloned(),
+                    pickup: pickup.cloned(),
+                    obstacle: obstacle.cloned(),
+                    power_up: power_up.cloned(),
+                    enemy: enemy.map(|e| EnemySnapshot {
+                        enemy_type: e.enemy_type.clone(),
+                        damage: e.damage,
+                        speed: e.speed,
+                    }),
+                });
+            }
         }
 
+        let spectators = self.get_spectator_snapshots();
         GameSnapshot {
             tick: self.world.resource::<TickCount>().0,
             entities,
+            chat_messages: self.get_recent_chat_messages(20),
+            spectators,
         }
+    }
+
+    /// Add a chat message to the game world
+    pub fn add_chat_message(&mut self, message: ChatMessage) {
+        self.chat_messages.push(message);
+
+        // Keep only last 100 messages to prevent memory bloat
+        if self.chat_messages.len() > 100 {
+            self.chat_messages.drain(0..self.chat_messages.len() - 100);
+        }
+    }
+
+    /// Get recent chat messages (last N messages)
+    pub fn get_recent_chat_messages(&self, count: usize) -> Vec<ChatMessage> {
+        let start = if self.chat_messages.len() > count {
+            self.chat_messages.len() - count
+        } else {
+            0
+        };
+        self.chat_messages[start..].to_vec()
+    }
+
+    /// Get spectator snapshots for all active spectators
+    pub fn get_spectator_snapshots(&mut self) -> Vec<SpectatorSnapshot> {
+        let mut query = self.world.query::<(Entity, &Spectator, &TransformQ)>();
+        let mut snapshots = Vec::new();
+
+        for (entity, spectator, transform) in query.iter(&self.world) {
+            snapshots.push(SpectatorSnapshot {
+                id: spectator.id.clone(),
+                transform: TransformQ {
+                    position: transform.position,
+                    rotation: transform.rotation,
+                },
+                camera_mode: format!("{:?}", spectator.camera_mode),
+                target_player_id: spectator.target_player_id.clone(),
+                view_distance: spectator.view_distance,
+            });
+        }
+
+        snapshots
     }
 
     fn fixed_update(&mut self) {
@@ -328,22 +448,39 @@ impl GameWorld {
 
         // 5. Cleanup (lifetime, etc.)
         self.cleanup();
+
+        // 6. Room cleanup
+        // Note: RoomManager cleanup is handled separately in RPC service
     }
 
     fn ingest_inputs(&mut self) {
+        // Clean up validator periodically
+        self.input_validator.cleanup();
+
         // Collect input applications first to avoid borrowing conflicts
         let mut input_applications = Vec::new();
 
         for (player_id, buffer) in &mut self.input_buffers {
             let pending_inputs = buffer.get_pending_inputs();
-            if let Some(latest_input) = pending_inputs.last() {
-                if let Some(player_entity) = self.world.resource::<PlayerEntityMap>().map.get(player_id) {
-                    input_applications.push((*player_entity, latest_input.movement[0] * 10.0, latest_input.movement[2] * 10.0));
+
+            // Validate and process inputs for this player
+            for input in pending_inputs {
+                match self.input_validator.validate_input(input) {
+                    Ok(_) => {
+                        // Input is valid, use it
+                        if let Some(player_entity) = self.world.resource::<PlayerEntityMap>().map.get(player_id) {
+                            input_applications.push((*player_entity, input.movement[0] * 10.0, input.movement[2] * 10.0));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Invalid input from player {}: {}", player_id, e);
+                        // Continue processing other inputs, don't break the game
+                    }
                 }
             }
         }
 
-        // Apply inputs after collecting
+        // Apply inputs after collecting and validating
         for (player_entity, vel_x, vel_z) in input_applications {
             if let Some(mut velocity) = self.world.get_mut::<VelocityQ>(player_entity) {
                 velocity.velocity[0] = vel_x;
@@ -650,10 +787,35 @@ impl GameWorld {
             });
         }
 
+        let spectators = self.get_spectator_snapshots();
         GameSnapshot {
             tick: self.world.resource::<TickCount>().0,
             entities,
+            chat_messages: self.get_recent_chat_messages(20),
+            spectators,
         }
+    }
+
+    /// Lấy vị trí của player từ player_id
+    pub fn get_player_position(&mut self, player_id: &str) -> Option<[f32; 3]> {
+        let mut query = self.world.query::<(&Player, &TransformQ)>();
+        for (player, transform) in query.iter(&self.world) {
+            if player.id == player_id {
+                return Some(transform.position);
+            }
+        }
+        None
+    }
+
+    /// Lấy view distance của player từ player_id
+    pub fn get_player_view_distance(&mut self, player_id: &str) -> Option<f32> {
+        let mut query = self.world.query::<&Player>();
+        for player in query.iter(&self.world) {
+            if player.id == player_id {
+                return Some(player.view_distance);
+            }
+        }
+        None
     }
 
     pub fn add_player(&mut self, player_id: String) -> Entity {
@@ -679,6 +841,8 @@ impl GameWorld {
             Player {
                 id: player_id.clone(),
                 score: 0,
+                view_distance: 50.0, // Default AOI radius
+                last_position: [0.0, 5.0, 0.0], // Initial position
             },
             RigidBodyHandle {
                 handle: body_handle,
@@ -693,6 +857,26 @@ impl GameWorld {
         }
 
         entity_id
+    }
+
+    /// Add a spectator to the game world
+    pub fn add_spectator(&mut self, spectator_id: String, camera_mode: SpectatorCameraMode) -> Entity {
+        // Create spectator entity without physics body (spectators don't interact with physics)
+        let entity = self.world.spawn((
+            TransformQ {
+                position: [0.0, 10.0, 0.0], // Start above the game area
+                rotation: [0.0, 0.0, 0.0, 1.0],
+            },
+            Spectator {
+                id: spectator_id.clone(),
+                target_player_id: None,
+                camera_mode,
+                view_distance: 100.0, // Larger view distance for spectators
+                last_position: [0.0, 10.0, 0.0],
+            },
+        ));
+
+        entity.id()
     }
 
     pub fn add_pickup(&mut self, position: [f32; 3], value: u32) -> Entity {

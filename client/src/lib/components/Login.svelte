@@ -1,6 +1,8 @@
-<script>
+<script lang="ts">
   // Authentication component with real backend connection
   import { authStore, authActions } from '$lib/stores/auth';
+  import { inputValidationErrors } from '$lib/stores/input';
+  import ValidationErrors from './ValidationErrors.svelte';
 
   let email = '';
   let password = '';
@@ -8,12 +10,18 @@
   let isLoading = false;
   let isAuthenticated = false;
   let currentUser = null;
+  let validationErrors = [];
 
   // Subscribe to auth store
   authStore.subscribe(state => {
     isLoading = state.isLoading;
     isAuthenticated = state.isAuthenticated;
     currentUser = state.user;
+  });
+
+  // Subscribe to input validation errors
+  inputValidationErrors.subscribe(errors => {
+    validationErrors = errors;
   });
 
   async function handleSubmit(event) {
@@ -64,6 +72,9 @@
         {error}
       </div>
     {/if}
+
+    <!-- Input validation errors -->
+    <ValidationErrors errors={validationErrors} title="Input Validation Errors" />
 
     <form on:submit={handleSubmit}>
       <div class="form-group">

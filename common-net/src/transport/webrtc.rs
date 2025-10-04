@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::message::{ControlMessage, Frame, StateMessage};
+use crate::{message::{ControlMessage, Frame, StateMessage}, compression::{CompressionConfig, CompressedData}};
 use super::{GameTransport, TransportError, TransportErrorKind, TransportKind};
 
 /// WebRTC DataChannel configuration
@@ -61,6 +61,9 @@ pub struct WebRtcTransport {
     // Connection state
     connected: Arc<RwLock<bool>>,
     fallback_to_ws: Arc<RwLock<bool>>,
+
+    // Compression configuration
+    compression_config: CompressionConfig,
 }
 
 impl WebRtcTransport {
@@ -82,6 +85,7 @@ impl WebRtcTransport {
             _signaling_rx: signaling_rx,
             connected: Arc::new(RwLock::new(false)),
             fallback_to_ws: Arc::new(RwLock::new(false)),
+            compression_config: CompressionConfig::default(),
         }
     }
 
@@ -225,6 +229,14 @@ impl GameTransport for WebRtcTransport {
         // For WebRTC, flush is typically handled by the DataChannel implementation
         // In this mock implementation, we just return Ok
         Ok(())
+    }
+
+    fn set_compression_config(&mut self, config: CompressionConfig) {
+        self.compression_config = config;
+    }
+
+    fn get_compression_config(&self) -> &CompressionConfig {
+        &self.compression_config
     }
 }
 

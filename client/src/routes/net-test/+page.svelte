@@ -59,7 +59,9 @@
         <div class="controls">
           <button on:click={addWebRTCTransport}>Add WebRTC Transport</button>
           <button on:click={addWebSocketTransport}>Add WebSocket Transport</button>
-          <button on:click={sendTransportMessage}>Send Transport Message</button>
+          <button on:click={sendTransportMessage}>Send Game Input</button>
+          <button on:click={sendMovementInput}>Send Movement (1,0,0)</button>
+          <button on:click={sendJumpInput}>Send Jump (0,1,0)</button>
           <button on:click={getTransportStats}>Get Transport Stats</button>
         </div>
       </div>
@@ -164,6 +166,9 @@
   import { webrtcStore, webrtcActions } from '$lib/stores/webrtc';
   import { transportStore, transportActions } from '$lib/stores/transport';
 
+  // SvelteKit route props
+  export let data;
+
   // WebSocket state
   let ws = null;
   let messages = [];
@@ -205,31 +210,52 @@
 
   function connectWebSocket() {
     try {
+      console.log('Attempting to connect to WebSocket at ws://localhost:8080/ws');
       ws = new WebSocket('ws://localhost:8080/ws');
 
       ws.onopen = () => {
+        console.log('WebSocket opened successfully');
         isConnected = true;
         connectionStatus = 'Connected';
-        addMessage('System', 'WebSocket connected');
+        addMessage('System', 'WebSocket connected successfully');
       };
 
       ws.onmessage = (event) => {
-        addMessage('Server', event.data);
+        console.log('Received WebSocket message:', event.data);
+        try {
+          // Try to parse as JSON first
+          const data = JSON.parse(event.data);
+          addMessage('Server', `JSON: ${JSON.stringify(data)}`);
+        } catch {
+          // If not JSON, treat as text
+          addMessage('Server', event.data);
+        }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        console.log('WebSocket closed:', event.code, event.reason);
         isConnected = false;
         connectionStatus = 'Disconnected';
-        addMessage('System', 'WebSocket disconnected');
+        addMessage('System', `WebSocket disconnected (Code: ${event.code}, Reason: ${event.reason})`);
       };
 
       ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        addMessage('Error', 'WebSocket connection failed');
+        console.error('WebSocket error event:', error);
+        addMessage('Error', `WebSocket error: ${error.type || 'Unknown error'}`);
       };
+
+      // Add timeout to detect connection issues
+      setTimeout(() => {
+        if (!isConnected && ws.readyState !== WebSocket.OPEN) {
+          console.log('WebSocket connection timeout or failed');
+          addMessage('Error', 'WebSocket connection timeout');
+          if (ws) ws.close();
+        }
+      }, 5000);
+
     } catch (error) {
-      console.error('Failed to connect:', error);
-      addMessage('Error', 'Failed to establish WebSocket connection');
+      console.error('Failed to create WebSocket:', error);
+      addMessage('Error', `Failed to create WebSocket: ${error.message}`);
     }
   }
 
@@ -405,18 +431,63 @@
     }
   }
 
+  async function sendMovementInput() {
+    try {
+      // Send movement input (1,0,0)
+      await transportActions.sendMessage({
+        id: `input_${Date.now()}`,
+        type: 'control',
+        payload: {
+          player_id: 'c3e0umn9yysaxu9',
+          input_sequence: Date.now(),
+          movement: [1.0, 0.0, 0.0] // x, y, z movement
+        },
+        timestamp: Date.now(),
+        transportType: 'websocket'
+      });
+      addMessage('Transport', 'Movement input sent: (1,0,0)');
+    } catch (error) {
+      addMessage('Transport', `Error sending movement input: ${error.message}`);
+    }
+  }
+
+  async function sendJumpInput() {
+    try {
+      // Send jump input (0,1,0)
+      await transportActions.sendMessage({
+        id: `input_${Date.now()}`,
+        type: 'control',
+        payload: {
+          player_id: 'c3e0umn9yysaxu9',
+          input_sequence: Date.now(),
+          movement: [0.0, 1.0, 0.0] // x, y, z jump
+        },
+        timestamp: Date.now(),
+        transportType: 'websocket'
+      });
+      addMessage('Transport', 'Jump input sent: (0,1,0)');
+    } catch (error) {
+      addMessage('Transport', `Error sending jump input: ${error.message}`);
+    }
+  }
+
   async function sendTransportMessage() {
     try {
+      // Send properly formatted PlayerInput for game logic
       await transportActions.sendMessage({
-        id: `msg_${Date.now()}`,
+        id: `input_${Date.now()}`,
         type: 'control',
-        payload: { action: 'test', data: 'Hello from transport manager' },
+        payload: {
+          player_id: 'c3e0umn9yysaxu9',
+          input_sequence: Date.now(),
+          movement: [1.0, 0.0, 0.0] // x, y, z movement
+        },
         timestamp: Date.now(),
         transportType: 'webrtc'
       });
-      addMessage('Transport', 'Transport message sent');
+      addMessage('Transport', 'Game input sent to Worker');
     } catch (error) {
-      addMessage('Transport', `Error sending transport message: ${error.message}`);
+      addMessage('Transport', `Error sending game input: ${error.message}`);
     }
   }
 

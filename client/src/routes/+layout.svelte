@@ -16,8 +16,7 @@
     </div>
 
     <div class="header-right">
-      <!-- <Login /> -->
-      <p>Login component tạm thời bị tắt để debug lỗi 500</p>
+      <Login />
     </div>
   </header>
 

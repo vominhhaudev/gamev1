@@ -93,12 +93,28 @@ pub async fn run(
     let svc = crate::rpc::WorkerService::new(state.clone());
 
     info!(addr = %config.rpc_addr, "worker: starting gRPC");
-    let task = tokio::spawn(async move {
+    let grpc_task = tokio::spawn(async move {
         crate::rpc::serve_rpc(config.rpc_addr, svc).await;
     });
 
+    // Room manager cleanup task
+    let cleanup_state = state.clone();
+    let cleanup_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60)); // Cleanup every minute
+        loop {
+            interval.tick().await;
+
+            let mut room_manager = cleanup_state.room_manager.write().await;
+            room_manager.cleanup();
+            drop(room_manager);
+
+            tracing::debug!("Room manager cleanup completed");
+        }
+    });
+
     common_net::shutdown::wait(shutdown_rx).await;
-    task.abort();
+    grpc_task.abort();
+    cleanup_task.abort();
     Ok(())
 }
 
@@ -111,6 +127,8 @@ pub mod rpc;
 pub mod snapshot;
 pub mod simulation;
 pub mod database;
+pub mod validation;
+pub mod room;
 
 #[cfg(test)]
 mod tests {

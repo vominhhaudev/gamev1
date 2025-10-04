@@ -2,6 +2,109 @@ import { writable, derived } from 'svelte/store';
 import { gameService } from './game';
 import type { InputState } from './types';
 
+// Input validation errors
+export interface InputValidationError {
+    field: string;
+    message: string;
+}
+
+// Input validation store
+export const inputValidationErrors = writable<InputValidationError[]>([]);
+
+// Client-side input validation
+export class InputValidator {
+    private static readonly MAX_MOVEMENT_MAGNITUDE = 10.0;
+
+    static validateMovement(movement: [number, number, number]): InputValidationError | null {
+        for (let i = 0; i < movement.length; i++) {
+            const val = movement[i];
+
+            if (isNaN(val)) {
+                return { field: `movement[${i}]`, message: 'Movement value cannot be NaN' };
+            }
+
+            if (!isFinite(val)) {
+                return { field: `movement[${i}]`, message: 'Movement value must be finite' };
+            }
+
+            if (Math.abs(val) > this.MAX_MOVEMENT_MAGNITUDE) {
+                return {
+                    field: `movement[${i}]`,
+                    message: `Movement magnitude too large: ${Math.abs(val)} > ${this.MAX_MOVEMENT_MAGNITUDE}`
+                };
+            }
+        }
+
+        return null;
+    }
+
+    static validatePlayerId(playerId: string): InputValidationError | null {
+        if (!playerId || playerId.trim().length === 0) {
+            return { field: 'player_id', message: 'Player ID is required' };
+        }
+
+        if (playerId.length > 50) {
+            return { field: 'player_id', message: 'Player ID too long (max 50 characters)' };
+        }
+
+        // Allow only alphanumeric, underscore, and hyphen
+        if (!/^[a-zA-Z0-9_-]+$/.test(playerId)) {
+            return { field: 'player_id', message: 'Player ID contains invalid characters' };
+        }
+
+        return null;
+    }
+
+    static validateSequence(sequence: number): InputValidationError | null {
+        if (!Number.isInteger(sequence) || sequence < 0) {
+            return { field: 'sequence', message: 'Sequence must be a non-negative integer' };
+        }
+
+        if (sequence > Number.MAX_SAFE_INTEGER) {
+            return { field: 'sequence', message: 'Sequence number too large' };
+        }
+
+        return null;
+    }
+
+    static validateTimestamp(timestamp: number): InputValidationError | null {
+        const now = Date.now();
+        const maxDiff = 10000; // 10 seconds
+
+        if (Math.abs(now - timestamp) > maxDiff) {
+            return { field: 'timestamp', message: 'Timestamp is too far from current time' };
+        }
+
+        return null;
+    }
+
+    static validateInput(input: any): InputValidationError[] {
+        const errors: InputValidationError[] = [];
+
+        if (input.player_id !== undefined) {
+            const playerIdError = this.validatePlayerId(input.player_id);
+            if (playerIdError) errors.push(playerIdError);
+        }
+
+        if (input.input_sequence !== undefined) {
+            const sequenceError = this.validateSequence(input.input_sequence);
+            if (sequenceError) errors.push(sequenceError);
+        }
+
+        if (input.movement !== undefined) {
+            const movementError = this.validateMovement(input.movement);
+            if (movementError) errors.push(movementError);
+        }
+
+        if (input.timestamp !== undefined) {
+            const timestampError = this.validateTimestamp(input.timestamp);
+            if (timestampError) errors.push(timestampError);
+        }
+
+        return errors;
+    }
+}
+
 // Input state store
 export const inputState = writable<InputState>({
     forward: false,
@@ -80,8 +183,20 @@ export class GameLoop {
         let movement: [number, number, number] = [0, 0, 0];
         movementVector.subscribe(m => movement = m)();
 
+        // Validate input trước khi gửi
+        const validationErrors = InputValidator.validateMovement(movement);
+        if (validationErrors) {
+            inputValidationErrors.set([validationErrors]);
+            return; // Don't send invalid input
+        }
+
+        // Clear validation errors if input is valid
+        inputValidationErrors.set([]);
+
         // Send input to game service nếu có kết nối
         if (gameService.getCurrentPlayerId()) {
+            // Ensure game service is initialized before sending input
+            await gameService.initializeGrpc();
             await gameService.sendInput(movement);
         }
     }
@@ -170,3 +285,4 @@ export function initializeInputHandlers() {
         window.removeEventListener('mousemove', handleMouseMove);
     };
 }
+

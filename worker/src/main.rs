@@ -1,4 +1,4 @@
-use worker::{WorkerConfig, simulation::{GameWorld, spawn_test_entities}, database::PocketBaseClient};
+use worker::{WorkerConfig, simulation::{GameWorld, spawn_test_entities}, database::PocketBaseClient, room::RoomManager};
 use common_net::telemetry;
 use std::time::{Duration, Instant};
 use tokio::time;

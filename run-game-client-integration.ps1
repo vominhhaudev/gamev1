@@ -59,7 +59,7 @@ Write-Host "🌐 Starting game client..." -ForegroundColor Cyan
 if (-not (Test-Path "client\node_modules")) {
     Write-Host "📦 Installing client dependencies..." -ForegroundColor Yellow
     Set-Location "client"
-    & "C:\Program Files\nodejs\node.exe" "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" install
+    & "C:\Program Files\nodejs\node.exe" "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" "install"
     Set-Location ".."
 }
 

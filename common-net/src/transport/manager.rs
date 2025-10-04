@@ -16,6 +16,7 @@ use super::{
     TransportConfig, TransportError, TransportEvent, TransportMessage,
     TransportStats, TransportType, ConnectionState, MessageType,
 };
+use crate::compression::{Compression, CompressionConfig, CompressedData};
 
 /// Default transport manager implementation
 pub struct DefaultTransportManager {
@@ -24,6 +25,7 @@ pub struct DefaultTransportManager {
     factories: Vec<Box<dyn TransportFactory>>,
     stats: Arc<RwLock<TransportManagerStats>>,
     health_check_interval: Duration,
+    compression_config: CompressionConfig,
 }
 
 impl DefaultTransportManager {
@@ -46,12 +48,28 @@ impl DefaultTransportManager {
                 total_failovers: 0,
             })),
             health_check_interval: Duration::from_secs(30),
+            compression_config: CompressionConfig::default(),
         }
     }
 
     pub fn with_health_check_interval(mut self, interval: Duration) -> Self {
         self.health_check_interval = interval;
         self
+    }
+
+    pub fn with_compression_config(mut self, config: CompressionConfig) -> Self {
+        self.compression_config = config;
+        self
+    }
+
+    pub fn set_compression_config(&mut self, config: CompressionConfig) {
+        self.compression_config = config;
+        // Update all active transports with new compression config
+        // TODO: Implement this when transport trait supports compression config
+    }
+
+    pub fn get_compression_config(&self) -> &CompressionConfig {
+        &self.compression_config
     }
 
     pub fn add_factory<F: TransportFactory + 'static>(mut self, factory: F) -> Self {

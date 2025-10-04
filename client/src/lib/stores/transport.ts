@@ -301,15 +301,23 @@ class TransportManager {
 
   private async sendGameInput(message: TransportMessage): Promise<void> {
     try {
+      // Convert TransportMessage payload to PlayerInput format
+      const playerInput = {
+        player_id: message.payload?.player_id || 'default_player',
+        input_sequence: message.payload?.input_sequence || Date.now(),
+        movement: message.payload?.movement || [0.0, 0.0, 0.0]
+      };
+
       const response = await fetch('/game/input', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          room_id: 'default_room', // TODO: Get from actual room
-          sequence: Date.now(),
-          input: message.payload,
+          room_id: 'default_room',
+          player_id: playerInput.player_id,
+          sequence: playerInput.input_sequence,
+          input: playerInput, // Send full PlayerInput struct
         }),
       });
 

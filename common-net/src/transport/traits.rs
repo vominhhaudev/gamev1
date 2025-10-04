@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug};
-use crate::message::Frame;
+use crate::{message::Frame, compression::{CompressionConfig, CompressedData}};
 use super::{TransportError, TransportType, MessageType, TransportMessage, ConnectionState, TransportEvent};
 
 /// Enhanced transport trait với support cho multiple channels và monitoring
@@ -22,8 +22,20 @@ pub trait Transport: Send + Sync {
     /// Send message through specific channel
     async fn send_message(&self, message: TransportMessage) -> Result<(), TransportError>;
 
+    /// Send compressed message
+    async fn send_compressed_message(&self, compressed_data: CompressedData) -> Result<(), TransportError>;
+
     /// Receive message from any channel
     async fn receive_message(&self) -> Result<TransportMessage, TransportError>;
+
+    /// Receive compressed message
+    async fn receive_compressed_message(&self) -> Result<Option<CompressedData>, TransportError>;
+
+    /// Set compression configuration
+    fn set_compression_config(&mut self, config: CompressionConfig);
+
+    /// Get current compression configuration
+    fn get_compression_config(&self) -> &CompressionConfig;
 
     /// Send control message (ordered, reliable)
     async fn send_control(&self, payload: serde_json::Value) -> Result<(), TransportError> {

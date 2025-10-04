@@ -1,3 +1,4 @@
+pub mod compression;
 pub mod message;
 pub mod metrics;
 pub mod shutdown;

@@ -18,6 +18,7 @@ use std::{fmt::Display, collections::HashMap};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use crate::compression::{CompressionConfig, CompressedData};
 use chrono::{DateTime, Utc};
 
 use crate::message::Frame;
@@ -138,6 +139,10 @@ pub trait GameTransport {
     async fn flush(&mut self) -> Result<(), TransportError> {
         Ok(())
     }
+
+    fn set_compression_config(&mut self, config: CompressionConfig);
+
+    fn get_compression_config(&self) -> &CompressionConfig;
 }
 
 /// Convenient helpers cho control/state channel.
