@@ -167,7 +167,6 @@
   import { transportStore, transportActions } from '$lib/stores/transport';
 
   // SvelteKit route props
-  export let data;
 
   // WebSocket state
   let ws = null;

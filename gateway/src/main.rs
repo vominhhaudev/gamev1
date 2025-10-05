@@ -19,7 +19,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use serde_json::json;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 // Các layer cần thiết cho production
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
 use tower::ServiceBuilder;
 use tracing::{error, info};
 
@@ -80,6 +80,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router với worker endpoint - nó sẽ tạo AppState bên trong
     let app = build_router(worker_endpoint).await;
+
+    // Add CORS layer to the main router - allow all origins for development
+    // let cors_layer = CorsLayer::new()
+    //     .allow_origin(Any)
+    //     .allow_methods(Any)
+    //     .allow_headers(Any)
+    //     .allow_credentials(true);
+
+    let app_with_cors = app.clone();
 
     let addr: SocketAddr = "0.0.0.0:8080".parse().unwrap();
     info!(%addr, "gateway listening");

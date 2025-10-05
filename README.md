@@ -2,31 +2,47 @@
 
 ## 🚀 Khởi động nhanh
 
-### Một lệnh duy nhất:
+### Các tùy chọn khởi động:
+
+#### 1️⃣ **Khởi động toàn bộ hệ thống (Khuyến nghị)**
 ```bash
-# Windows
+# Cách nhanh nhất - một lệnh duy nhất
+.\restart-all-services-simple.ps1
+
+# Hoặc sử dụng batch file
 run-gamev1.bat
-
-# PowerShell - Chạy toàn bộ hệ thống (worker + client)
-.\run-game-client-integration.ps1
-
-# Hoặc chạy riêng lẻ:
-.\restart-all-services.ps1  # Chỉ backend services
 ```
 
-### Truy cập:
-- **Game Client**: http://localhost:5173
-- **Game trực tiếp**: http://localhost:5173/game
-- **Đăng nhập**: admin@pocketbase.local / 123456789
+#### 2️⃣ **Khởi động từng phần để debug**
+```bash
+# Chỉ backend services (gateway + pocketbase)
+.\restart-all-services.ps1
+
+# Chỉ game worker + client (integration test)
+.\run-game-client-integration.ps1
+```
+
+### 🌐 Truy cập hệ thống:
+- **🎮 Game Client**: http://localhost:5173
+- **🎯 Game trực tiếp**: http://localhost:5173/game
+- **🔗 Gateway API**: http://localhost:8080
+- **🗄️ PocketBase Admin**: http://localhost:8090/_/
+- **📊 Health Check**: http://localhost:8080/healthz
+
+### 🔑 Thông tin đăng nhập:
+- **PocketBase Admin**: admin@pocketbase.local / 123456789
 
 ### 🎮 Cách chơi game:
-1. Mở http://localhost:5173/game trong trình duyệt
-2. Nhấn "Join Game" để kết nối với game server
-3. Sử dụng **WASD** để di chuyển nhân vật
-4. Giữ **Shift** để chạy nhanh (sprint)
-5. Thu thập các **hình tròn vàng** để tăng điểm
-6. Tránh **hình tròn đỏ** (enemies) kẻo bị tấn công
-7. Các **hình tròn xám** là vật cản không thể đi qua
+1. **Khởi động hệ thống** bằng một trong các lệnh ở trên
+2. **Mở trình duyệt** và truy cập http://localhost:5173/game
+3. **Nhấn phím bất kỳ** để bắt đầu game
+4. **Điều khiển**:
+   - **WASD** hoặc **Arrow Keys**: Di chuyển nhân vật
+   - **Space**: Nhảy qua chướng ngại vật
+   - **A/D** hoặc **←/→**: Đổi lane
+   - **S** hoặc **↓**: Trượt dưới chướng ngại vật
+   - **R**: Reset game
+5. **Mục tiêu**: Chạy càng xa càng tốt, thu thập điểm và tránh chướng ngại vật
 
 ## 📚 Tài liệu chi tiết
 - [Quick Start Guide](QUICK-START-GUIDE.md) - Hướng dẫn đầy đủ
@@ -58,27 +74,14 @@ npm run build
 
 ## 🎮 Tính năng Game đã triển khai
 
-### ✅ Hệ thống Core
-- **ECS Architecture**: Sử dụng Bevy ECS để quản lý entities
-- **Physics Engine**: Rapier 3D physics simulation
-- **Network Layer**: gRPC-based communication với input buffering
-- **Fixed Timestep**: Game loop 60 FPS với interpolation phù hợp
-
-### ✅ Gameplay Mechanics
-- **Player Movement**: Điều khiển nhân vật dựa trên physics với xử lý input
-- **Pickup Collection**: Hệ thống điểm với collision detection
-- **Dynamic Entities**:
-  - Obstacles (tường, gai)
-  - Power-ups (tăng tốc, nhảy cao, bất tử)
-  - Enemies (cơ bản, nhanh, tank với AI)
-- **Combat System**: Enemy AI với pattern tấn công và damage cho player
-- **Collision Detection**: Xử lý va chạm thời gian thực cho mọi loại entity
-
-### ✅ Tính năng nâng cao
-- **Input Buffer**: Bù trừ độ trễ mạng với sequence numbers
-- **Entity Lifecycle**: Spawn, despawn và cleanup phù hợp
-- **Comprehensive Testing**: Test tích hợp end-to-end
-- **Logging & Metrics**: Tracing chi tiết và monitoring hiệu suất
+### ✅ Tính năng đã triển khai:
+- **Complete Endless Runner Game** với physics simulation
+- **Dynamic Track Generation** với obstacles và power-ups
+- **Real-time Input Processing** với keyboard controls
+- **Game State Management** với score và statistics
+- **Collision Detection** và physics simulation
+- **Audio System** với sound effects và background music
+- **Power-up System** với temporary effects
 
 ## 🧪 Chạy Tests
 
@@ -86,68 +89,61 @@ npm run build
 # Chạy tất cả tests
 cargo test
 
-# Chạy test cụ thể
-cargo test --package worker                    # Worker tests
-cargo test test_game_simulation_basic         # Basic simulation
-cargo test test_comprehensive_game_simulation # Full gameplay test
+# Chạy test cụ thể cho worker
+cargo test --package worker
 
-# Chạy integration tests (cần async runtime)
+# Chạy integration tests
 cargo test test_end_to_end_client_worker_integration
-cargo test test_input_processing_end_to_end
 ```
-
-## 🏗️ Kiến trúc Game Engine
-
-### Simulation Engine (`worker/src/simulation.rs`)
-- `GameWorld`: Simulation chính với ECS + Physics
-- `PlayerInput`: Network input với sequence numbers
-- `GameSnapshot`: Serialization trạng thái world
-- Collision detection và gameplay logic toàn diện
-
-### Network Layer (`worker/src/rpc.rs`)
-- gRPC service cho giao tiếp client
-- Xử lý và validate input
-- Streaming snapshot thời gian thực
-
-### Hệ thống Entity
-- **Players**: Nhân vật có thể di chuyển với physics bodies
-- **Pickups**: Items có thể thu thập với giá trị điểm
-- **Obstacles**: Object va chạm tĩnh
-- **Power-ups**: Tăng cường khả năng tạm thời
-- **Enemies**: Entity AI-controlled với combat
-
-## 🎯 Gameplay Features
-
-1. **Movement System**: Điều khiển player dựa trên physics với network input
-2. **Scoring**: Thu thập pickups để tăng điểm
-3. **Combat**: Enemies tấn công players, power-ups bảo vệ
-4. **AI Behavior**: Enemies tìm kiếm và tấn công players thông minh
-5. **Collision Handling**: Tất cả entities tương tác thực tế
 
 ## 🚀 Trạng thái phát triển
 
-**🎉 HOÀN THÀNH!** Tích hợp Client-Worker hoàn chỉnh:
+**🎉 HOÀN THÀNH!** Dự án GameV1 đã hoàn thiện với:
 
-### ✅ Đã triển khai:
-- ✅ **Game Engine hoàn chỉnh** với ECS, Physics, Gameplay
-- ✅ **Client Frontend** với Svelte + real-time rendering
-- ✅ **Network Integration** với gRPC và input buffering
-- ✅ **Interactive Gameplay** với controls và visual feedback
-- ✅ **End-to-End Testing** với integration scripts
+### ✅ Các thành phần hoàn chỉnh:
+- **🏗️ Backend Services**: Gateway (HTTP API), Worker (Game Logic), PocketBase (Database)
+- **🎮 Frontend Client**: SvelteKit với giao diện người dùng hiện đại
+- **🎯 Game Engine**: Endless Runner 3D với physics simulation
+- **🔗 Network Layer**: gRPC communication giữa client và worker
+- **🗄️ Database**: PocketBase với admin UI và collections
 
-### 🎮 Client tích hợp bao gồm:
-- **Real-time 3D Rendering** với Canvas 2D (có thể nâng cấp lên 3D)
-- **Live Input Processing** (WASD movement, Shift sprint)
-- **Game State Visualization** với màu sắc phân biệt entities
-- **Connection Management** với error handling
-- **Game Statistics Display** với tick count và entity counts
+### 🎮 Các tính năng chính:
+- **Real-time 3D Rendering** với Canvas 2D (Three.js-style graphics)
+- **Complete Input System** với keyboard controls (WASD, Space, Arrow keys)
+- **Dynamic Track Generation** với obstacles, power-ups, và lane switching
+- **Game State Management** với score, speed, distance tracking
+- **Collision Detection** và physics simulation
+- **Audio System** với sound effects và background music
+- **Power-up System** với temporary effects (speed boost, jump boost, invincibility)
 
 ### 🚀 Sẵn sàng sử dụng:
 ```powershell
-# Chạy toàn bộ hệ thống
+# Khởi động toàn bộ hệ thống (khuyến nghị)
+.\restart-all-services-simple.ps1
+
+# Hoặc chỉ worker + client để test nhanh
 .\run-game-client-integration.ps1
 
-# Sau đó mở: http://localhost:5173/game
+# Truy cập game: http://localhost:5173/game
 ```
+
+## 🏗️ Kiến trúc hệ thống
+
+### Backend Services (Rust)
+- **Gateway**: HTTP API server với Axum framework và WebSocket support
+- **Worker**: Game logic với gRPC server và physics simulation
+- **PocketBase**: Database với admin UI và authentication
+
+### Frontend Client (SvelteKit + TypeScript)
+- **Real-time 3D Rendering** với Canvas 2D (Three.js-style graphics)
+- **Input Processing** với keyboard và mouse event handling
+- **State Management** với Svelte stores và reactive updates
+- **Network Communication** với gRPC client và WebSocket
+
+### Game Engine Features
+- **Physics Simulation** với collision detection và movement
+- **Entity Management** với spawn/despawn và lifecycle management
+- **Input Buffering** để xử lý độ trễ mạng và sequence numbers
+- **Game State Synchronization** giữa client và worker với snapshots
 
 Hệ thống đã sẵn sàng để mở rộng thêm tính năng multiplayer, nâng cấp graphics, hoặc phát triển gameplay nâng cao hơn!

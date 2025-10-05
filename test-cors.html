@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CORS Test</title>
+</head>
+<body>
+    <h1>CORS Test for GameV1</h1>
+    <button onclick="testCORS()">Test CORS Connection</button>
+    <div id="result"></div>
+
+    <script>
+        async function testCORS() {
+            const result = document.getElementById('result');
+            result.innerHTML = 'Testing...';
+
+            try {
+                const response = await fetch('http://localhost:8080/healthz');
+                if (response.ok) {
+                    result.innerHTML = '<span style="color: green">✅ Gateway reachable</span>';
+                } else {
+                    result.innerHTML = `<span style="color: red">❌ Gateway responded with ${response.status}</span>`;
+                }
+            } catch (error) {
+                result.innerHTML = `<span style="color: red">❌ Connection failed: ${error.message}</span>`;
+            }
+        }
+
+        // Auto test on load
+        window.onload = testCORS;
+    </script>
+</body>
+</html>

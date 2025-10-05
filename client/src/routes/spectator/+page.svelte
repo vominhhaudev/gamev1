@@ -4,7 +4,6 @@
   import { currentPlayer, isConnected } from '$lib/stores/game';
 
   // SvelteKit route props
-  export let data;
 
   // Spectator state
   let spectatorId = null;

@@ -1,6 +1,5 @@
 <script lang="ts">
   // SvelteKit route props
-  export let data;
 </script>
 
 <svelte:head>

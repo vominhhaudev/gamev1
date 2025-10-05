@@ -28,7 +28,7 @@
     }
   };
 
-  let updateInterval: number;
+  let updateInterval;
   let isVisible = false;
 
   onMount(() => {
@@ -86,7 +86,7 @@
     isVisible = !isVisible;
   }
 
-  function formatBytes(bytes: number): string {
+  function formatBytes(bytes) {
     if (bytes === 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
@@ -94,11 +94,11 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
-  function formatBandwidth(bytesPerSecond: number): string {
+  function formatBandwidth(bytesPerSecond) {
     return formatBytes(bytesPerSecond) + '/s';
   }
 
-  function getStatusColor(status: string): string {
+  function getStatusColor(status) {
     switch (status) {
       case 'connected': return '#2ecc71';
       case 'connecting': return '#f39c12';
@@ -107,7 +107,7 @@
     }
   }
 
-  function getCompressionColor(ratio: number): string {
+  function getCompressionColor(ratio) {
     if (ratio < 0.5) return '#2ecc71'; // Good compression
     if (ratio < 0.7) return '#f39c12'; // Moderate compression
     return '#e74c3c'; // Poor compression

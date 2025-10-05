@@ -1,7 +1,15 @@
 <script lang="ts">
   import '../app.css';
-  import Login from '$lib/components/Login.svelte';
   import { authStore } from '$lib/stores/auth';
+  import { browser } from '$app/environment';
+
+  // Only import Login component on client-side to avoid SSR issues
+  let LoginComponent = null;
+  if (browser) {
+    import('$lib/components/Login.svelte').then(module => {
+      LoginComponent = module.default;
+    });
+  }
 </script>
 
 <svelte:head>
@@ -16,7 +24,11 @@
     </div>
 
     <div class="header-right">
-      <Login />
+      {#if LoginComponent}
+        <svelte:component this={LoginComponent} />
+      {:else}
+        <div class="login-placeholder">Loading...</div>
+      {/if}
     </div>
   </header>
 
@@ -72,5 +84,10 @@
 
   .app-main {
     padding: 2rem;
+  }
+
+  .login-placeholder {
+    color: #666;
+    font-size: 0.9rem;
   }
 </style>

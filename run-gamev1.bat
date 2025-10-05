@@ -29,17 +29,17 @@ if "%choice%"=="4" goto show_help
 
 :start_all
 echo 🚀 Starting all services...
-powershell -ExecutionPolicy Bypass -File "%~dp0restart-all-services.ps1"
+powershell -ExecutionPolicy Bypass -File "%~dp0restart-all-services-simple.ps1"
 goto end
 
 :stop_all
 echo 📴 Stopping all services...
-powershell -ExecutionPolicy Bypass -File "%~dp0restart-all-services.ps1" -Stop
+powershell -ExecutionPolicy Bypass -File "%~dp0restart-all-services-simple.ps1" -Stop
 goto end
 
 :check_status
 echo 📊 Checking system status...
-powershell -ExecutionPolicy Bypass -File "%~dp0restart-all-services.ps1" -Status
+powershell -ExecutionPolicy Bypass -File "%~dp0restart-all-services-simple.ps1" -Status
 goto end
 
 :show_help
@@ -52,15 +52,23 @@ echo   run-gamev1.bat              - Start all services
 echo   run-gamev1.bat stop         - Stop all services
 echo   run-gamev1.bat status       - Check status
 echo.
+echo ALTERNATIVE COMMANDS:
+echo   .\restart-all-services-simple.ps1    - PowerShell version
+echo   .\run-game-client-integration.ps1   - Only worker + client
+echo.
 echo MANUAL COMMANDS (if needed):
 echo   cd pocketbase ^&^& pocketbase.exe serve --http=127.0.0.1:8090
 echo   cd gateway ^&^& cargo run
+echo   cd worker ^&^& cargo run
 echo   cd client ^&^& npm run dev
 echo.
 echo TROUBLESHOOTING:
-echo   1. Close all terminals
-echo   2. Open new terminal
+echo   1. Close all terminals and PowerShell windows
+echo   2. Open new terminal in project root
 echo   3. Run: run-gamev1.bat
+echo   4. If Node.js errors: Run 'npm install' in client folder
+echo   5. If Rust errors: Run 'cargo build' in each service folder
+echo   6. If port conflicts: Use .\restart-all-services-simple.ps1 -Stop first
 echo.
 pause
 goto end

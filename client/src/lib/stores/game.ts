@@ -48,24 +48,55 @@ export class GameService {
     async initializeGrpc() {
         if (this.initialized) return;
         this.initialized = true;
-        try {
-            // For now, we'll use HTTP API instead of direct gRPC connection
-            // This avoids CORS issues and works better in browser environment
-            console.log('✅ Game service initialized (using HTTP API)');
 
-            // Test connection to gateway
-            const response = await fetch('http://localhost:8080/healthz');
-            if (response.ok) {
-                isConnected.set(true);
-                connectionError.set(null);
-                console.log('✅ Connected to game gateway');
-            } else {
-                throw new Error('Gateway not responding');
+        console.log('🚀 Initializing game service...');
+
+        // Single connection attempt with timeout
+        const maxRetries = 3;
+        const timeout = 3000; // 3 seconds
+        const retryDelay = 1000; // 1 second between retries
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                console.log(`🔄 Connection attempt ${attempt}/${maxRetries}...`);
+
+                // Test connection to gateway with timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+                const response = await fetch('http://localhost:8080/healthz', {
+                    method: 'GET',
+                    signal: controller.signal,
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    isConnected.set(true);
+                    connectionError.set(null);
+                    console.log('✅ Connected to game gateway');
+                    return; // Success, exit retry loop
+                } else {
+                    throw new Error(`Gateway responded with status: ${response.status}`);
+                }
+            } catch (error) {
+                const errorMessage = error.name === 'AbortError' ? 'Connection timeout' : (error.message || 'Unknown error');
+
+                if (attempt === maxRetries) {
+                    console.error(`❌ Failed to connect after ${maxRetries} attempts:`, errorMessage);
+                    isConnected.set(false);
+                    connectionError.set(`Connection failed: ${errorMessage}. Please check if the gateway server is running.`);
+                    // Stop retrying after max attempts
+                    return;
+                } else {
+                    console.warn(`⏳ Connection attempt ${attempt} failed (${errorMessage}), retrying in ${retryDelay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                }
             }
-        } catch (error) {
-            console.error('❌ Failed to connect to game gateway:', error);
-            isConnected.set(false);
-            connectionError.set(error.message);
         }
     }
 
@@ -74,10 +105,17 @@ export class GameService {
             await this.initializeGrpc();
         }
 
+        // Don't proceed if not connected to gateway
+        if (!$isConnected) {
+            console.warn('⚠️ Cannot join room: not connected to gateway');
+            return false;
+        }
+
         this.playerId = playerId;
 
         try {
-            // Use HTTP API instead of gRPC
+            console.log(`🔄 Joining room ${this.roomId} as player ${playerId}...`);
+
             const response = await fetch(`http://localhost:8080/api/rooms/${this.roomId}/join`, {
                 method: 'POST',
                 headers: {
@@ -96,11 +134,12 @@ export class GameService {
                 console.log(`✅ Player ${playerId} joined room ${this.roomId}`);
                 return true;
             } else {
-                throw new Error(data.error || 'Failed to join room');
+                throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
             }
         } catch (error) {
-            console.error('❌ Failed to join room:', error);
-            connectionError.set(error.message);
+            const errorMessage = error.message || 'Unknown error';
+            console.error(`❌ Failed to join room:`, errorMessage);
+            connectionError.set(`Failed to join room: ${errorMessage}`);
             return false;
         }
     }
@@ -273,6 +312,10 @@ export const gameService = new GameService();
 
 // Export actions for easy use in components
 export const gameActions = {
+    async initializeGrpc() {
+        return await gameService.initializeGrpc();
+    },
+
     async joinGame(roomId: string, playerId: string) {
         return await gameService.joinGame(roomId, playerId);
     },

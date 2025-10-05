@@ -440,16 +440,20 @@ impl GameWorld {
         // 2. Validate inputs (anti-cheat cơ bản)
         self.validate_inputs();
 
-        // 3. Physics step
+        // 3. Endless Runner specific logic (auto-run, procedural generation)
+        let delta_time = self.tick_rate;
+        self.update_endless_runner(delta_time);
+
+        // 4. Physics step
         self.physics_step();
 
-        // 4. Gameplay logic
+        // 5. Gameplay logic (collision detection, etc.)
         self.gameplay_logic();
 
-        // 5. Cleanup (lifetime, etc.)
+        // 6. Cleanup (lifetime, etc.)
         self.cleanup();
 
-        // 6. Room cleanup
+        // 7. Room cleanup
         // Note: RoomManager cleanup is handled separately in RPC service
     }
 
@@ -1013,6 +1017,115 @@ impl GameWorld {
                 speed,
                 last_attack: Instant::now(),
                 attack_cooldown,
+            },
+            RigidBodyHandle {
+                handle: body_handle,
+            },
+        ));
+
+        entity.id()
+    }
+
+    /// Endless Runner specific gameplay logic
+    pub fn update_endless_runner(&mut self, delta_time: Duration) {
+        // Auto-run forward movement for all players
+        let mut player_query = self.world.query::<(&mut TransformQ, &mut Player)>();
+        for (mut transform, mut player) in player_query.iter_mut(&mut self.world) {
+            let run_speed = 12.0; // Base running speed for endless runner
+            transform.position[2] += run_speed * delta_time.as_secs_f32();
+
+            // Update player score based on distance traveled
+            let distance_traveled = transform.position[2] - player.last_position[2];
+            if distance_traveled > 0.0 {
+                player.score += (distance_traveled * 10.0) as u32; // Score per unit distance
+                player.last_position = transform.position;
+            }
+        }
+
+        // Procedural obstacle generation for endless runner
+        self.generate_endless_runner_obstacles();
+
+        // Lane-based movement constraints (keep players in their lanes)
+        self.update_lane_positions();
+    }
+
+    /// Generate obstacles ahead of players for endless runner
+    fn generate_endless_runner_obstacles(&mut self) {
+        let mut player_positions = Vec::new();
+        let mut player_query = self.world.query::<(&TransformQ, &Player)>();
+        for (transform, _) in player_query.iter(&self.world) {
+            player_positions.push(transform.position[2]);
+        }
+
+        for player_z in player_positions {
+            // Generate obstacles 60-100 units ahead (farther for endless runner)
+            if player_z % 25.0 < 0.1 { // Every 25 units for more spaced obstacles
+                let obstacle_z = player_z + 60.0 + (rand::random::<f32>() * 40.0);
+                let lane = rand::random::<usize>() % 3;
+                let lanes = [-3.0, 0.0, 3.0]; // Wider lanes for 3D
+
+                // Random obstacle type for variety
+                let obstacle_types = ["wall", "spike", "moving_platform"];
+                let obstacle_type = obstacle_types[rand::random::<usize>() % obstacle_types.len()];
+
+                self.add_obstacle(
+                    [lanes[lane], 0.5, obstacle_z],
+                    obstacle_type.to_string()
+                );
+            }
+
+            // Occasionally spawn power-ups
+            if player_z % 50.0 < 0.1 && rand::random::<f32>() < 0.3 { // 30% chance every 50 units
+                let powerup_z = player_z + 70.0 + (rand::random::<f32>() * 30.0);
+                let lane = rand::random::<usize>() % 3;
+                let lanes = [-3.0, 0.0, 3.0];
+
+                let power_types = ["speed_boost", "jump_boost", "invincibility"];
+                let power_type = power_types[rand::random::<usize>() % power_types.len()];
+
+                self.add_power_up(
+                    [lanes[lane], 2.0, powerup_z],
+                    power_type.to_string(),
+                    10, // 10 seconds duration
+                    100 // 100 points value
+                );
+            }
+        }
+    }
+
+    /// Keep players in their lanes (snap to lane positions)
+    fn update_lane_positions(&mut self) {
+        let mut query = self.world.query::<(&mut TransformQ, &mut Player)>();
+        for (mut transform, _) in query.iter_mut(&mut self.world) {
+            // Snap to lane positions (x-axis) for endless runner
+            let lanes = [-3.0, 0.0, 3.0];
+            let closest_lane = lanes.iter()
+                .min_by(|a, b| (transform.position[0] - **a).abs().partial_cmp(&(transform.position[0] - **b).abs()).unwrap())
+                .unwrap();
+            transform.position[0] = *closest_lane;
+        }
+    }
+
+    /// Add endless runner specific pickup (coins/gems)
+    pub fn add_endless_runner_pickup(&mut self, position: [f32; 3], value: u32) -> Entity {
+        // Add to physics first
+        let rigid_body = RigidBodyBuilder::fixed()
+            .translation(vector![position[0], position[1], position[2]])
+            .build();
+        let collider = ColliderBuilder::ball(0.4).build();
+
+        let body_handle = self.bodies.insert(rigid_body);
+        self.colliders.insert_with_parent(collider, body_handle, &mut self.bodies);
+
+        // Create entity with components
+        let entity = self.world.spawn((
+            TransformQ {
+                position,
+                rotation: [0.0, 0.0, 0.0, 1.0],
+            },
+            Pickup { value },
+            Lifetime {
+                remaining: Duration::from_secs(30), // Pickup tồn tại 30s
             },
             RigidBodyHandle {
                 handle: body_handle,

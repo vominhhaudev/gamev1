@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>GameV1 Access Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .service { margin: 10px 0; padding: 10px; border-radius: 5px; }
+        .success { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+        .error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>🎮 GameV1 Service Status</h1>
+
+    <div class="service" id="client-status">
+        <strong>🔍 Checking Client (port 5173)...</strong>
+    </div>
+
+    <div class="service" id="gateway-status">
+        <strong>🔍 Checking Gateway (port 8080)...</strong>
+    </div>
+
+    <div class="service" id="pocketbase-status">
+        <strong>🔍 Checking PocketBase (port 8090)...</strong>
+    </div>
+
+    <h2>🌐 Access URLs:</h2>
+    <p><strong>🏠 Home Page:</strong> <a href="http://localhost:5173" target="_blank">http://localhost:5173</a></p>
+    <p><strong>🎮 Game Page:</strong> <a href="http://localhost:5173/game" target="_blank">http://localhost:5173/game</a></p>
+    <p><strong>🔧 Network Test:</strong> <a href="http://localhost:5173/net-test" target="_blank">http://localhost:5173/net-test</a></p>
+    <p><strong>🗄️ PocketBase Admin:</strong> <a href="http://localhost:8090/_/" target="_blank">http://localhost:8090/_/</a></p>
+
+    <h2>🔑 Admin Login:</h2>
+    <p><strong>Email:</strong> vominhhauviettel@gmail.com</p>
+    <p><strong>Password:</strong> pt123456789</p>
+
+    <button onclick="testServices()">🔄 Test All Services</button>
+    <button onclick="openGame()">🎮 Open Game</button>
+
+    <script>
+        async function testService(url, elementId, serviceName) {
+            try {
+                const response = await fetch(url);
+                if (response.ok) {
+                    document.getElementById(elementId).className = 'service success';
+                    document.getElementById(elementId).innerHTML = `<strong>✅ ${serviceName}:</strong> Running (${response.status})`;
+                } else {
+                    document.getElementById(elementId).className = 'service error';
+                    document.getElementById(elementId).innerHTML = `<strong>❌ ${serviceName}:</strong> Error (${response.status})`;
+                }
+            } catch (error) {
+                document.getElementById(elementId).className = 'service error';
+                document.getElementById(elementId).innerHTML = `<strong>❌ ${serviceName}:</strong> Connection failed`;
+            }
+        }
+
+        async function testServices() {
+            document.getElementById('client-status').className = 'service warning';
+            document.getElementById('client-status').innerHTML = '<strong>🔍 Checking Client...</strong>';
+
+            document.getElementById('gateway-status').className = 'service warning';
+            document.getElementById('gateway-status').innerHTML = '<strong>🔍 Checking Gateway...</strong>';
+
+            document.getElementById('pocketbase-status').className = 'service warning';
+            document.getElementById('pocketbase-status').innerHTML = '<strong>🔍 Checking PocketBase...</strong>';
+
+            await testService('http://localhost:5173', 'client-status', 'Client');
+            await testService('http://localhost:8080/healthz', 'gateway-status', 'Gateway');
+            await testService('http://localhost:8090/api/health', 'pocketbase-status', 'PocketBase');
+        }
+
+        function openGame() {
+            window.open('http://localhost:5173/game', '_blank');
+        }
+
+        // Auto test on load
+        window.onload = testServices;
+    </script>
+</body>
+</html>

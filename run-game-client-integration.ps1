@@ -59,12 +59,14 @@ Write-Host "🌐 Starting game client..." -ForegroundColor Cyan
 if (-not (Test-Path "client\node_modules")) {
     Write-Host "📦 Installing client dependencies..." -ForegroundColor Yellow
     Set-Location "client"
-    & "C:\Program Files\nodejs\node.exe" "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js" "install"
+    npm install
     Set-Location ".."
 }
 
 # Start client in new window
-$clientProcess = Start-Process "cmd" -ArgumentList "/k cd /d `"$PSScriptRoot\client`" `; `"C:\Program Files\nodejs\node.exe`" node_modules\.bin\vite dev --host 0.0.0.0 --port 5173" -PassThru
+Set-Location "client"
+$clientProcess = Start-Process "npm" -ArgumentList "run dev" -PassThru
+Set-Location ".."
 
 Write-Host "✅ Game client started (PID: $($clientProcess.Id))" -ForegroundColor Green
 

@@ -3,7 +3,6 @@
   import { currentPlayer } from '$lib/stores/game';
 
   // SvelteKit route props
-  export let data;
 
   let currentPlayerId = null;
 

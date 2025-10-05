@@ -6,13 +6,15 @@ use tokio::sync::oneshot;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use axum::{extract::{State, Path, Query}, http::StatusCode, response::IntoResponse, routing::{get, post, delete}, Json, Router};
+use axum::{extract::{State, Path, Query}, http::{StatusCode, Method, HeaderValue, HeaderMap}, response::{IntoResponse, Response}, routing::{get, post, delete}, Json, Router};
 use chrono::{DateTime, Utc};
 use hyper::{header::AUTHORIZATION, server::conn::AddrIncoming};
 use once_cell::sync::Lazy;
 use prometheus::{register_int_counter_vec, register_int_gauge_vec, Encoder, IntCounterVec, IntGaugeVec, TextEncoder};
 use tracing::error;
 use metrics::{counter, histogram};
+use tower_http::cors::{Any, CorsLayer};
+use tower::{Layer, Service};
 
 use common_net::message::{self, ControlMessage, Frame, FramePayload};
 use common_net::transport::{GameTransport, TransportKind, WebRtcTransport};
@@ -435,6 +437,73 @@ async fn handle_rtc_answer(
     })
 }
 
+// CORS middleware layer
+#[derive(Clone)]
+pub struct CorsMiddleware;
+
+impl<S> Layer<S> for CorsMiddleware {
+    type Service = CorsService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        CorsService { inner }
+    }
+}
+
+#[derive(Clone)]
+pub struct CorsService<S> {
+    inner: S,
+}
+
+impl<S> Service<axum::http::Request<axum::body::Body>> for CorsService<S>
+where
+    S: Service<axum::http::Request<axum::body::Body>, Response = axum::http::Response<axum::body::Body>> + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: axum::http::Request<axum::body::Body>) -> Self::Future {
+        // Handle preflight requests
+        if request.method() == axum::http::Method::OPTIONS {
+            let mut response = axum::http::Response::builder()
+                .status(axum::http::StatusCode::OK)
+                .header("Access-Control-Allow-Origin", "*")
+                .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+                .header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept")
+                .header("Access-Control-Max-Age", "86400")
+                .body(axum::body::Body::empty())
+                .unwrap();
+            return Box::pin(async move { Ok(response) });
+        }
+
+        let future = self.inner.call(request);
+        Box::pin(async move {
+            let mut response = future.await?;
+            let headers = response.headers_mut();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept".parse().unwrap());
+            Ok(response)
+        })
+    }
+}
+
+// Helper function to add CORS headers to responses (deprecated - using CORS middleware instead)
+// Helper function to create CORS-enabled response
+fn cors_response<T: IntoResponse>(response: T) -> impl IntoResponse {
+    let mut resp = response.into_response();
+    let headers = resp.headers_mut();
+    headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+    headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+    headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept".parse().unwrap());
+    resp
+}
+
 pub async fn build_router(worker_endpoint: String) -> Router {
     let signaling_state: SignalingState = Arc::new(RwLock::new(HashMap::new()));
     let signaling_sessions: SignalingSessions = Arc::new(RwLock::new(HashMap::new()));
@@ -442,6 +511,13 @@ pub async fn build_router(worker_endpoint: String) -> Router {
     let ws_registry: WebSocketRegistry = Arc::new(RwLock::new(HashMap::new()));
     let transport_registry: TransportRegistry = Arc::new(RwLock::new(HashMap::new()));
     let auth_config = auth::EmailAuthConfig::from_env();
+
+    // Configure CORS layer - allow all origins for development
+    // let cors_layer = CorsLayer::new()
+    //     .allow_origin(Any)
+    //     .allow_methods(Any)
+    //     .allow_headers(Any)
+    //     .allow_credentials(true);
 
     // Create worker client
     let worker_client = match WorkerClient::connect(worker_endpoint.clone()).await {
@@ -696,12 +772,31 @@ async fn post_inputs(
 
 async fn healthz() -> impl IntoResponse {
     HTTP_REQUESTS_TOTAL.with_label_values(&[HEALTHZ_PATH]).inc();
-    axum::http::StatusCode::OK
+
+    let mut response = axum::http::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        .header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Cache-Control, Pragma")
+        .header("Access-Control-Max-Age", "86400")
+        .header("Vary", "Origin")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    response
 }
 
 async fn test_handler() -> impl IntoResponse {
     HTTP_REQUESTS_TOTAL.with_label_values(&["/test"]).inc();
-    Json(serde_json::json!({"message": "test endpoint works"}))
+
+    let mut response = Json(serde_json::json!({"message": "test endpoint works"})).into_response();
+    let headers = response.headers_mut();
+    headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+    headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+    headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Cache-Control, Pragma".parse().unwrap());
+    headers.insert("Access-Control-Max-Age", "86400".parse().unwrap());
+    headers.insert("Vary", "Origin".parse().unwrap());
+    response
 }
 
 async fn version() -> impl IntoResponse {
@@ -710,7 +805,15 @@ async fn version() -> impl IntoResponse {
         "name": "gateway",
         "version": env!("CARGO_PKG_VERSION"),
     });
-    Json(body)
+
+    let mut response = Json(body).into_response();
+    let headers = response.headers_mut();
+    headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+    headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+    headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Cache-Control, Pragma".parse().unwrap());
+    headers.insert("Access-Control-Max-Age", "86400".parse().unwrap());
+    headers.insert("Vary", "Origin".parse().unwrap());
+    response
 }
 
 async fn metrics() -> impl IntoResponse {
@@ -720,17 +823,31 @@ async fn metrics() -> impl IntoResponse {
     let encoder = TextEncoder::new();
     if let Err(err) = encoder.encode(&metric_families, &mut buffer) {
         error!(%err, "metrics encode failed");
-        return (
+        let mut response = (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             "metrics encode failed"
         ).into_response();
+        let headers = response.headers_mut();
+        headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+        headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+        headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Cache-Control, Pragma".parse().unwrap());
+        headers.insert("Access-Control-Max-Age", "86400".parse().unwrap());
+        headers.insert("Vary", "Origin".parse().unwrap());
+        return response;
     }
     let body = String::from_utf8(buffer).unwrap_or_default();
-    (
+    let mut response = (
         axum::http::StatusCode::OK,
         [(axum::http::header::CONTENT_TYPE, encoder.format_type())],
         body
-    ).into_response()
+    ).into_response();
+    let headers = response.headers_mut();
+    headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+    headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+    headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Cache-Control, Pragma".parse().unwrap());
+    headers.insert("Access-Control-Max-Age", "86400".parse().unwrap());
+    headers.insert("Vary", "Origin".parse().unwrap());
+    response
 }
 
 async fn ws_handler(
@@ -1295,23 +1412,38 @@ async fn list_rooms_handler(
                     })
                 }).collect();
 
-                Json(serde_json::json!({
+                let mut response = Json(serde_json::json!({
                     "success": true,
                     "rooms": rooms_json
-                })).into_response()
+                })).into_response();
+                let headers = response.headers_mut();
+                headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+                headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+                headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept".parse().unwrap());
+                response
             } else {
-                Json(serde_json::json!({
+                let mut response = Json(serde_json::json!({
                     "success": false,
                     "error": response_inner.error
-                })).into_response()
+                })).into_response();
+                let headers = response.headers_mut();
+                headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+                headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+                headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept".parse().unwrap());
+                response
             }
         }
         Err(e) => {
             tracing::error!(error = %e, "gateway: failed to list rooms");
-            Json(serde_json::json!({
+            let mut response = Json(serde_json::json!({
                 "success": false,
                 "error": "Failed to list rooms"
-            })).into_response()
+            })).into_response();
+            let headers = response.headers_mut();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept".parse().unwrap());
+            response
         }
     }
 }
