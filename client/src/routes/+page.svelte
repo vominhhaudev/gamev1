@@ -240,39 +240,6 @@
     border: 1px solid rgba(74, 158, 255, 0.3);
   }
 
-  .route-corrections {
-    background: rgba(255, 107, 107, 0.1);
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin: 2rem 0;
-    border: 1px solid rgba(255, 107, 107, 0.3);
-    backdrop-filter: blur(10px);
-  }
-
-  .route-corrections h3 {
-    margin: 0 0 1rem 0;
-    color: #ff6b6b;
-    font-size: 1.2rem;
-  }
-
-  .route-corrections p {
-    margin: 0.5rem 0;
-    font-size: 0.9rem;
-    color: #cccccc;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .route-corrections strong {
-    color: #ff6b6b;
-  }
-
-  .route-corrections a {
-    color: #4a9eff;
-    text-decoration: none;
-    font-weight: 600;
-  }
 
   .game-info {
     background: rgba(74, 158, 255, 0.1);

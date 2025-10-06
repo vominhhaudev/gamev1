@@ -15,6 +15,11 @@ export const isJoiningRoom = writable<boolean>(false);
 // Room error store
 export const roomError = writable<string | null>(null);
 
+// Leaderboard store
+export const leaderboardData = writable<any[]>([]);
+export const isLoadingLeaderboard = writable<boolean>(false);
+export const leaderboardError = writable<string | null>(null);
+
 // Gateway base URL
 const GATEWAY_BASE_URL = 'http://localhost:8080';
 
@@ -492,7 +497,94 @@ export const roomActions = {
         return roomService.getRoomSpectators();
     },
 
+    // Leaderboard methods
+    async loadLeaderboard(gameMode?: string, timeRange?: string): Promise<any[]> {
+        isLoadingLeaderboard.set(true);
+        leaderboardError.set(null);
+
+        try {
+            const params = new URLSearchParams();
+            if (gameMode) params.append('gameMode', gameMode);
+            if (timeRange) params.append('timeRange', timeRange);
+
+            const response = await fetch(`${this.gatewayUrl}/api/leaderboard?${params}`, {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                leaderboardData.set(data.leaderboard || []);
+                return data.leaderboard || [];
+            } else {
+                throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+            }
+        } catch (error) {
+            const errorMessage = error.message || 'Unknown error';
+            console.error('❌ Failed to load leaderboard:', errorMessage);
+            leaderboardError.set(`Failed to load leaderboard: ${errorMessage}`);
+            return [];
+        } finally {
+            isLoadingLeaderboard.set(false);
+        }
+    },
+
+    async submitScore(playerId: string, score: number, gameMode: string, roomId?: string): Promise<boolean> {
+        try {
+            const response = await fetch(`${this.gatewayUrl}/api/leaderboard/submit`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    playerId,
+                    score,
+                    gameMode,
+                    roomId,
+                    timestamp: Date.now(),
+                }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                console.log('✅ Score submitted successfully');
+                // Reload leaderboard after submitting score
+                await this.loadLeaderboard(gameMode);
+                return true;
+            } else {
+                throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+            }
+        } catch (error) {
+            console.error('❌ Failed to submit score:', error);
+            return false;
+        }
+    },
+
+    getLeaderboardData(): any[] {
+        let data: any[] = [];
+        leaderboardData.subscribe(value => data = value)();
+        return data;
+    },
+
+    isLoadingLeaderboardData(): boolean {
+        let loading = false;
+        isLoadingLeaderboard.subscribe(value => loading = value)();
+        return loading;
+    },
+
+    getLeaderboardError(): string | null {
+        let error: string | null = null;
+        leaderboardError.subscribe(value => error = value)();
+        return error;
+    },
+
     getRoomById(roomId: string): RoomInfo | null {
         return roomService.getRoomById(roomId);
     },
+
+    // Leaderboard actions are available through roomService methods above
 };

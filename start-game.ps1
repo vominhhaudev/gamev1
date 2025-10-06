@@ -313,7 +313,7 @@ try {
             }
         }
 
-        Write-Host "👋 Shutdown complete!" -ForegroundColor Green
+        Write-Host "Shutdown complete!" -ForegroundColor Green
     }
 
 }
@@ -327,7 +327,7 @@ catch {
     Write-Host "   3. Check port availability: netstat -an | findstr :port" -ForegroundColor White
     Write-Host "   4. Run with -Verbose flag for detailed output" -ForegroundColor White
     Write-Host ""
-    Write-Host "📞 Need help? Check the troubleshooting guide." -ForegroundColor Cyan
+    Write-Host "Need help? Check the troubleshooting guide." -ForegroundColor Cyan
 
     exit 1
 }

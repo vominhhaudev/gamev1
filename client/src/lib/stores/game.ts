@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import type { GameSnapshot, PlayerInput, EntitySnapshot } from './types';
 
 // Game state store
@@ -6,6 +6,9 @@ export const gameState = writable<GameSnapshot | null>(null);
 
 // Current player store
 export const currentPlayer = writable<string | null>(null);
+
+// Current game mode
+export const currentGameMode = writable<string>('deathmatch');
 
 // Connection status
 export const isConnected = writable<boolean>(false);
@@ -106,7 +109,7 @@ export class GameService {
         }
 
         // Don't proceed if not connected to gateway
-        if (!$isConnected) {
+        if (!get(isConnected)) {
             console.warn('⚠️ Cannot join room: not connected to gateway');
             return false;
         }

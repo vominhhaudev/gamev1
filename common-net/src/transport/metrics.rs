@@ -1,14 +1,14 @@
 use std::{
     collections::HashMap,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::{
-    TransportEvent, TransportType, ConnectionState, MessageType,
-    traits::{Transport, TransportManager},
+    TransportEvent, TransportType, ConnectionState,
+    traits::Transport,
 };
 
 /// Transport metrics collector
@@ -83,13 +83,13 @@ impl TransportMetrics {
             TransportEvent::Connected { transport_type, session_id } => {
                 self.add_transport(transport_type, session_id).await;
             }
-            TransportEvent::Disconnected { transport_type, session_id, .. } => {
+            TransportEvent::Disconnected {  session_id, .. } => {
                 self.remove_transport(&session_id).await;
             }
-            TransportEvent::MessageSent { transport_type, message_type, size } => {
+            TransportEvent::MessageSent { transport_type, message_type: _, size } => {
                 self.record_message_sent(&transport_type, size).await;
             }
-            TransportEvent::MessageReceived { transport_type, message_type, size } => {
+            TransportEvent::MessageReceived { transport_type, message_type: _, size } => {
                 self.record_message_received(&transport_type, size).await;
             }
             TransportEvent::Error { transport_type, .. } => {
@@ -147,7 +147,7 @@ impl TransportMetrics {
         }
     }
 
-    async fn record_message_sent(&self, transport_type: &TransportType, size: usize) {
+    async fn record_message_sent(&self, _transport_type: &TransportType, size: usize) {
         let mut global_stats = self.global_stats.write().await;
         global_stats.total_messages_sent += 1;
         global_stats.total_bytes_sent += size as u64;
@@ -156,12 +156,12 @@ impl TransportMetrics {
         #[cfg(feature = "metrics")]
         {
             use metrics::{counter, histogram};
-            counter!("transport_messages_sent_total", 1, "transport_type" => transport_type.to_string());
-            histogram!("transport_message_size_bytes", size as f64, "transport_type" => transport_type.to_string());
+            counter!("transport_messages_sent_total").increment(1);
+            histogram!("transport_message_size_bytes").record(size as f64);
         }
     }
 
-    async fn record_message_received(&self, transport_type: &TransportType, size: usize) {
+    async fn record_message_received(&self, _transport_type: &TransportType, size: usize) {
         let mut global_stats = self.global_stats.write().await;
         global_stats.total_messages_received += 1;
         global_stats.total_bytes_received += size as u64;
@@ -170,44 +170,41 @@ impl TransportMetrics {
         #[cfg(feature = "metrics")]
         {
             use metrics::{counter, histogram};
-            counter!("transport_messages_received_total", 1, "transport_type" => transport_type.to_string());
-            histogram!("transport_message_size_bytes", size as f64, "transport_type" => transport_type.to_string(), "direction" => "received");
+            counter!("transport_messages_received_total").increment(1);
+            histogram!("transport_message_size_bytes_received").record(size as f64);
         }
     }
 
-    async fn record_error(&self, transport_type: &TransportType) {
+    async fn record_error(&self, _transport_type: &TransportType) {
         let mut global_stats = self.global_stats.write().await;
         global_stats.total_errors += 1;
 
         #[cfg(feature = "metrics")]
         {
             use metrics::counter;
-            counter!("transport_errors_total", 1, "transport_type" => transport_type.to_string());
+            counter!("transport_errors_total").increment(1);
         }
     }
 
-    async fn record_reconnect(&self, transport_type: &TransportType) {
+    async fn record_reconnect(&self, _transport_type: &TransportType) {
         let mut global_stats = self.global_stats.write().await;
         global_stats.total_reconnects += 1;
 
         #[cfg(feature = "metrics")]
         {
             use metrics::counter;
-            counter!("transport_reconnects_total", 1, "transport_type" => transport_type.to_string());
+            counter!("transport_reconnects_total").increment(1);
         }
     }
 
-    async fn record_failover(&self, from_transport: &TransportType, to_transport: &TransportType) {
+    async fn record_failover(&self, _from_transport: &TransportType, _to_transport: &TransportType) {
         let mut global_stats = self.global_stats.write().await;
         global_stats.total_failovers += 1;
 
         #[cfg(feature = "metrics")]
         {
             use metrics::counter;
-            counter!("transport_failovers_total", 1,
-                "from_transport" => from_transport.to_string(),
-                "to_transport" => to_transport.to_string()
-            );
+            counter!("transport_failovers_total").increment(1);
         }
     }
 

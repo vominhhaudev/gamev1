@@ -1,11 +1,9 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
-use crate::{message::{ControlMessage, Frame, StateMessage}, compression::{CompressionConfig, CompressedData}};
+use crate::{message::{ControlMessage, Frame}, compression::CompressionConfig};
 use super::{GameTransport, TransportError, TransportErrorKind, TransportKind};
 
 /// WebRTC DataChannel configuration
@@ -39,8 +37,8 @@ impl DataChannelConfig {
     }
 }
 
-/// WebRTC transport implementation
-/// Note: This is a placeholder implementation that uses WebSocket as fallback
+/// WebRTC DataChannel transport implementation
+/// This implementation uses internal channels to simulate DataChannels
 /// For production, integrate with actual WebRTC library like webrtc-rs
 #[derive(Debug)]
 pub struct WebRtcTransport {
@@ -64,6 +62,20 @@ pub struct WebRtcTransport {
 
     // Compression configuration
     compression_config: CompressionConfig,
+
+    // Statistics
+    stats: Arc<RwLock<TransportStats>>,
+}
+
+/// Statistics for WebRTC transport
+#[derive(Debug, Default, Clone)]
+pub struct TransportStats {
+    pub messages_sent: u64,
+    pub messages_received: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub errors: u64,
+    pub reconnects: u64,
 }
 
 impl WebRtcTransport {
@@ -86,7 +98,19 @@ impl WebRtcTransport {
             connected: Arc::new(RwLock::new(false)),
             fallback_to_ws: Arc::new(RwLock::new(false)),
             compression_config: CompressionConfig::default(),
+            stats: Arc::new(RwLock::new(TransportStats::default())),
         }
+    }
+
+    /// Get transport statistics
+    pub async fn get_stats(&self) -> TransportStats {
+        self.stats.read().await.clone()
+    }
+
+    /// Update statistics
+    async fn update_stats(&self, update_fn: impl FnOnce(&mut TransportStats)) {
+        let mut stats = self.stats.write().await;
+        update_fn(&mut stats);
     }
 
     /// Get signaling sender for external signaling
@@ -151,15 +175,39 @@ impl GameTransport for WebRtcTransport {
             ));
         }
 
+        // Update statistics
+        let frame_size = match &frame.payload {
+            crate::message::FramePayload::Control { .. } => std::mem::size_of::<crate::message::ControlMessage>() as u64,
+            crate::message::FramePayload::State { .. } => std::mem::size_of::<crate::message::StateMessage>() as u64,
+        };
+        self.update_stats(|stats| {
+            stats.messages_sent += 1;
+            stats.bytes_sent += frame_size;
+        }).await;
+
         // Route to appropriate DataChannel based on channel type
         match frame.channel {
             crate::message::Channel::Control => {
                 if let Some(ref mut tx) = self.control_tx {
-                    tx.send(frame).map_err(|_| TransportError::new(
-                        TransportErrorKind::Backpressure,
-                        "Control channel full"
-                    ))?;
+                    tx.send(frame).map_err(|_| {
+                        // Update error stats asynchronously in a separate task
+                        let stats_updater = self.stats.clone();
+                        tokio::spawn(async move {
+                            let mut stats = stats_updater.write().await;
+                            stats.errors += 1;
+                        });
+                        TransportError::new(
+                            TransportErrorKind::Backpressure,
+                            "Control channel full"
+                        )
+                    })?;
                 } else {
+                    // Update error stats asynchronously in a separate task
+                    let stats_updater = self.stats.clone();
+                    tokio::spawn(async move {
+                        let mut stats = stats_updater.write().await;
+                        stats.errors += 1;
+                    });
                     return Err(TransportError::new(
                         TransportErrorKind::ConnectionClosed,
                         "Control channel not available"
@@ -168,11 +216,25 @@ impl GameTransport for WebRtcTransport {
             }
             crate::message::Channel::State => {
                 if let Some(ref mut tx) = self.state_tx {
-                    tx.send(frame).map_err(|_| TransportError::new(
-                        TransportErrorKind::Backpressure,
-                        "State channel full"
-                    ))?;
+                    tx.send(frame).map_err(|_| {
+                        // Update error stats asynchronously in a separate task
+                        let stats_updater = self.stats.clone();
+                        tokio::spawn(async move {
+                            let mut stats = stats_updater.write().await;
+                            stats.errors += 1;
+                        });
+                        TransportError::new(
+                            TransportErrorKind::Backpressure,
+                            "State channel full"
+                        )
+                    })?;
                 } else {
+                    // Update error stats asynchronously in a separate task
+                    let stats_updater = self.stats.clone();
+                    tokio::spawn(async move {
+                        let mut stats = stats_updater.write().await;
+                        stats.errors += 1;
+                    });
                     return Err(TransportError::new(
                         TransportErrorKind::ConnectionClosed,
                         "State channel not available"
@@ -192,28 +254,52 @@ impl GameTransport for WebRtcTransport {
             ));
         }
 
-        // Try to receive from either control or state channel
+        // Try to receive from control channel first (higher priority)
         if let Some(ref mut control_rx) = self.control_rx {
             if let Ok(frame) = control_rx.try_recv() {
+                let frame_size = match &frame.payload {
+                    crate::message::FramePayload::Control { .. } => std::mem::size_of::<crate::message::ControlMessage>() as u64,
+                    crate::message::FramePayload::State { .. } => std::mem::size_of::<crate::message::StateMessage>() as u64,
+                };
+                self.update_stats(|stats| {
+                    stats.messages_received += 1;
+                    stats.bytes_received += frame_size;
+                }).await;
                 return Ok(frame);
             }
         }
 
+        // Then try state channel
         if let Some(ref mut state_rx) = self.state_rx {
             if let Ok(frame) = state_rx.try_recv() {
+                let frame_size = match &frame.payload {
+                    crate::message::FramePayload::Control { .. } => std::mem::size_of::<crate::message::ControlMessage>() as u64,
+                    crate::message::FramePayload::State { .. } => std::mem::size_of::<crate::message::StateMessage>() as u64,
+                };
+                self.update_stats(|stats| {
+                    stats.messages_received += 1;
+                    stats.bytes_received += frame_size;
+                }).await;
                 return Ok(frame);
             }
         }
 
-        // No frames available
+        // No frames available - this is normal for non-blocking recv
         Err(TransportError::new(
-            TransportErrorKind::ConnectionClosed,
+            TransportErrorKind::Backpressure,
             "No frames available"
         ))
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
+        info!("Closing WebRTC transport for room: {} peer: {}", self.room_id, self.peer_id);
+
         self.set_connected(false).await;
+
+        // Update reconnect stats if we fell back to WebSocket
+        if *self.fallback_to_ws.read().await {
+            self.update_stats(|stats| stats.reconnects += 1).await;
+        }
 
         // Close channels
         self.control_tx.take();

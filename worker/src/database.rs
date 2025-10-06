@@ -64,7 +64,7 @@ struct DatabaseMetrics {
     cache_misses: AtomicU64,
     db_queries: AtomicU64,
     db_errors: AtomicU64,
-    avg_query_time_ms: AtomicU64,
+    total_query_time_ms: AtomicU64,
 }
 
 impl DatabaseMetrics {
@@ -78,10 +78,7 @@ impl DatabaseMetrics {
 
     fn record_db_query(&self, duration_ms: u64) {
         self.db_queries.fetch_add(1, Ordering::Relaxed);
-        self.avg_query_time_ms.store(
-            (self.avg_query_time_ms.load(Ordering::Relaxed) + duration_ms) / 2,
-            Ordering::Relaxed
-        );
+        self.total_query_time_ms.fetch_add(duration_ms, Ordering::Relaxed);
     }
 
     fn record_db_error(&self) {
@@ -89,12 +86,16 @@ impl DatabaseMetrics {
     }
 
     fn get_stats(&self) -> (u64, u64, u64, u64, u64) {
+        let queries = self.db_queries.load(Ordering::Relaxed);
+        let total_time = self.total_query_time_ms.load(Ordering::Relaxed);
+        let avg_time = if queries > 0 { total_time / queries } else { 0 };
+
         (
             self.cache_hits.load(Ordering::Relaxed),
             self.cache_misses.load(Ordering::Relaxed),
-            self.db_queries.load(Ordering::Relaxed),
+            queries,
             self.db_errors.load(Ordering::Relaxed),
-            self.avg_query_time_ms.load(Ordering::Relaxed),
+            avg_time,
         )
     }
 }
@@ -293,9 +294,9 @@ impl PocketBaseClient {
         let start_time = Instant::now();
 
         // Try cache first
-        let mut games: Vec<GameRecord> = Vec::new();
-        let mut cache_hits = 0;
-        let mut cache_misses = 0;
+        let _games: Vec<GameRecord> = Vec::new();
+        let _cache_hits = 0;
+        let _cache_misses = 0;
 
         // Check cache for existing games
         // For now, we'll query database and cache results

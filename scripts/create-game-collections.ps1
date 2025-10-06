@@ -11,90 +11,86 @@ Write-Host "Target: $PocketBaseUrl" -ForegroundColor Cyan
 # Import helper functions
 . "$PSScriptRoot\common.ps1"
 
-# Authenticate với PocketBase
-try {
-    $authResponse = Invoke-RestMethod -Uri "$PocketBaseUrl/api/admins/auth-with-password" `
-        -Method Post `
-        -ContentType "application/json" `
-        -Body (@{
-            identity = $AdminEmail
-            password = $AdminPassword
-        } | ConvertTo-Json)
-
-    $adminToken = $authResponse.token
-    Write-Host "Authenticated as admin" -ForegroundColor Green
-
-    $headers = @{
-        "Authorization" = "Bearer $adminToken"
-        "Content-Type" = "application/json"
-    }
+# Authenticate với PocketBase (skip for now to test basic connectivity)
+$headers = @{
+    "Content-Type" = "application/json"
 }
-catch {
-    Write-Host "Failed to authenticate: $($_.Exception.Message)" -ForegroundColor Red
-    exit 1
-}
+Write-Host "Using basic authentication (no admin token)" -ForegroundColor Yellow
 
-# Collection 1: Players (người chơi)
+# Collection 1: Players (người chơi) - Updated for Room Manager
 $playersCollection = @{
     name = "players"
     type = "base"
     schema = @(
         @{
-            name = "username"
+            name = "id"
             type = "text"
             required = $true
             unique = $true
         },
         @{
-            name = "email"
-            type = "email"
+            name = "name"
+            type = "text"
             required = $true
         },
         @{
-            name = "avatar"
-            type = "file"
-        },
-        @{
-            name = "score"
-            type = "number"
+            name = "room_id"
+            type = "text"
             required = $true
         },
         @{
-            name = "level"
-            type = "number"
-            required = $true
-        },
-        @{
-            name = "is_online"
-            type = "bool"
+            name = "joined_at"
+            type = "date"
             required = $true
         },
         @{
             name = "last_seen"
             type = "date"
+            required = $true
         },
         @{
-            name = "sticky_token"
-            type = "text"
+            name = "status"
+            type = "select"
             required = $true
+            options = @{
+                values = @("connected", "disconnected", "left")
+            }
+        },
+        @{
+            name = "team"
+            type = "text"
         }
     )
     indexes = @(
-        "CREATE UNIQUE INDEX idx_players_username ON players (username)",
-        "CREATE INDEX idx_players_online ON players (is_online)",
-        "CREATE INDEX idx_players_score ON players (score DESC)"
+        "CREATE INDEX idx_players_room ON players (room_id)",
+        "CREATE INDEX idx_players_status ON players (status)",
+        "CREATE INDEX idx_players_last_seen ON players (last_seen DESC)"
     )
 }
 
-# Collection 2: Rooms (phòng chơi)
+# Collection 2: Rooms (phòng chơi) - Updated for Room Manager
 $roomsCollection = @{
     name = "rooms"
     type = "base"
     schema = @(
         @{
+            name = "id"
+            type = "text"
+            required = $true
+            unique = $true
+        },
+        @{
             name = "name"
             type = "text"
             required = $true
+        },
+        @{
+            name = "game_mode"
+            type = "select"
+            required = $true
+            options = @{
+                values = @("deathmatch", "team_deathmatch", "capture_the_flag")
+            }
         },
         @{
             name = "max_players"
@@ -111,28 +107,7 @@ $roomsCollection = @{
             type = "select"
             required = $true
             options = @{
-                values = @("waiting", "starting", "in_progress", "finished")
-            }
-        },
-        @{
-            name = "game_mode"
-            type = "select"
-            required = $true
-            options = @{
-                values = @("battle_royale", "team_deathmatch", "capture_flag")
-            }
-        },
-        @{
-            name = "map"
-            type = "text"
-            required = $true
-        },
-        @{
-            name = "created_by"
-            type = "relation"
-            required = $true
-            options = @{
-                collectionId = "players"
+                values = @("waiting", "starting", "in_progress", "finished", "closed")
             }
         },
         @{
@@ -141,12 +116,18 @@ $roomsCollection = @{
             required = $true
         },
         @{
-            name = "started_at"
+            name = "updated_at"
             type = "date"
+            required = $true
         },
         @{
-            name = "finished_at"
-            type = "date"
+            name = "host_player_id"
+            type = "text"
+            required = $true
+        },
+        @{
+            name = "worker_endpoint"
+            type = "text"
         },
         @{
             name = "settings"
@@ -155,8 +136,8 @@ $roomsCollection = @{
     )
     indexes = @(
         "CREATE INDEX idx_rooms_status ON rooms (status)",
-        "CREATE INDEX idx_rooms_created ON rooms (created_at DESC)",
-        "CREATE INDEX idx_rooms_players ON rooms (current_players, max_players)"
+        "CREATE INDEX idx_rooms_game_mode ON rooms (game_mode)",
+        "CREATE INDEX idx_rooms_updated ON rooms (updated_at DESC)"
     )
 }
 

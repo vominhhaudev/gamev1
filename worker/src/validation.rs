@@ -1,6 +1,4 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{warn, error};
 
 /// Input validation errors
 #[derive(Debug, Clone)]
@@ -331,12 +329,17 @@ mod tests {
             ..Default::default()
         });
 
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
         // First two inputs should be valid
         assert!(validator.check_rate_limit("player1").is_ok());
-        validator.update_tracking("player1", 1, 1000);
+        validator.update_tracking("player1", 1, now - 500); // 500ms ago
 
         assert!(validator.check_rate_limit("player1").is_ok());
-        validator.update_tracking("player1", 2, 1100);
+        validator.update_tracking("player1", 2, now - 400); // 400ms ago
 
         // Third input should be rate limited
         assert!(validator.check_rate_limit("player1").is_err());

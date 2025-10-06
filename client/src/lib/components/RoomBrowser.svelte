@@ -27,6 +27,13 @@
   let newRoomMaxPlayers = 8;
   let newRoomHasPassword = false;
   let newRoomPassword = '';
+  let newRoomTimeLimit = 300; // 5 minutes default
+  let newRoomAllowSpectators = true;
+
+  // Leaderboard state
+  let showLeaderboard = false;
+  let leaderboardGameMode = '';
+  let leaderboardTimeRange = '';
 
   // Subscribe to stores
   roomList.subscribe(value => {
@@ -134,12 +141,12 @@
         maxPlayers: newRoomMaxPlayers,
         gameMode: newRoomGameMode,
         mapName: 'default_map',
-        timeLimit: 300,
+        timeLimit: newRoomTimeLimit,
         hasPassword: newRoomHasPassword,
         isPrivate: false,
-        allowSpectators: true,
+        allowSpectators: newRoomAllowSpectators,
         autoStart: true,
-        minPlayersToStart: 2,
+        minPlayersToStart: 1,
       },
     });
 
@@ -161,6 +168,15 @@
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     return `${Math.floor(seconds / 3600)}h ago`;
   }
+
+  async function loadLeaderboard() {
+    await roomActions.loadLeaderboard(leaderboardGameMode || undefined, leaderboardTimeRange || undefined);
+  }
+
+  // Load leaderboard on mount
+  onMount(() => {
+    loadLeaderboard();
+  });
 </script>
 
 <div class="room-browser">
@@ -181,8 +197,8 @@
   <!-- Filter Controls -->
   <div class="filters">
     <div class="filter-group">
-      <label>Game Mode:</label>
-      <select bind:value={filter.gameMode} on:change={handleFilterChange}>
+      <label for="gameModeFilter">Game Mode:</label>
+      <select id="gameModeFilter" bind:value={filter.gameMode} on:change={handleFilterChange}>
         <option value={undefined}>All</option>
         <option value="deathmatch">Deathmatch</option>
         <option value="team_deathmatch">Team Deathmatch</option>
@@ -192,8 +208,8 @@
     </div>
 
     <div class="filter-group">
-      <label>Password:</label>
-      <select bind:value={filter.hasPassword} on:change={handleFilterChange}>
+      <label for="passwordFilter">Password:</label>
+      <select id="passwordFilter" bind:value={filter.hasPassword} on:change={handleFilterChange}>
         <option value={undefined}>All</option>
         <option value={true}>Protected</option>
         <option value={false}>Open</option>
@@ -201,8 +217,9 @@
     </div>
 
     <div class="filter-group">
-      <label>Min Players:</label>
+      <label for="minPlayersFilter">Min Players:</label>
       <input
+        id="minPlayersFilter"
         type="number"
         min="1"
         max="16"
@@ -213,8 +230,9 @@
     </div>
 
     <div class="filter-group">
-      <label>Max Players:</label>
+      <label for="maxPlayersFilter">Max Players:</label>
       <input
+        id="maxPlayersFilter"
         type="number"
         min="2"
         max="16"
@@ -233,8 +251,9 @@
       <h3>Create New Room</h3>
       <div class="form-grid">
         <div class="form-group">
-          <label>Room Name:</label>
+          <label for="roomNameInput">Room Name:</label>
           <input
+            id="roomNameInput"
             type="text"
             bind:value={newRoomName}
             placeholder="Enter room name"
@@ -243,8 +262,8 @@
         </div>
 
         <div class="form-group">
-          <label>Game Mode:</label>
-          <select bind:value={newRoomGameMode}>
+          <label for="roomGameModeSelect">Game Mode:</label>
+          <select id="roomGameModeSelect" bind:value={newRoomGameMode}>
             <option value="deathmatch">Deathmatch</option>
             <option value="team_deathmatch">Team Deathmatch</option>
             <option value="capture_the_flag">Capture the Flag</option>
@@ -253,8 +272,9 @@
         </div>
 
         <div class="form-group">
-          <label>Max Players:</label>
+          <label for="roomMaxPlayersInput">Max Players:</label>
           <input
+            id="roomMaxPlayersInput"
             type="number"
             min="2"
             max="16"
@@ -263,9 +283,29 @@
         </div>
 
         <div class="form-group">
-          <label>
-            <input type="checkbox" bind:checked={newRoomHasPassword} />
+          <label for="roomTimeLimitInput">Time Limit (seconds):</label>
+          <input
+            id="roomTimeLimitInput"
+            type="number"
+            min="60"
+            max="3600"
+            step="30"
+            bind:value={newRoomTimeLimit}
+            placeholder="300 (5 minutes)"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="roomPasswordCheckbox">
+            <input id="roomPasswordCheckbox" type="checkbox" bind:checked={newRoomHasPassword} />
             Password Protected
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label for="roomAllowSpectatorsCheckbox">
+            <input id="roomAllowSpectatorsCheckbox" type="checkbox" bind:checked={newRoomAllowSpectators} />
+            Allow Spectators
           </label>
         </div>
       </div>
@@ -307,6 +347,14 @@
                 <span>{room.playerCount}/{room.maxPlayers}</span>
               </div>
               <div class="info-row">
+                <span>Spectators:</span>
+                <span>{room.spectatorCount || 0}</span>
+              </div>
+              <div class="info-row">
+                <span>Time Limit:</span>
+                <span>{room.settings?.timeLimit ? `${room.settings.timeLimit}s` : 'No limit'}</span>
+              </div>
+              <div class="info-row">
                 <span>Created:</span>
                 <span>{formatTimeAgo(room.createdAt)}</span>
               </div>
@@ -341,6 +389,56 @@
       </div>
     {/if}
   </div>
+
+  <!-- Leaderboard Modal -->
+  {#if showLeaderboard}
+    <div class="leaderboard-modal">
+      <div class="leaderboard-content">
+        <div class="leaderboard-header">
+          <h3>🏆 Global Leaderboard</h3>
+          <button class="close-btn" on:click={() => showLeaderboard = false}>×</button>
+        </div>
+
+        <div class="leaderboard-filters">
+          <select bind:value={leaderboardGameMode} on:change={loadLeaderboard}>
+            <option value="">All Game Modes</option>
+            <option value="deathmatch">Deathmatch</option>
+            <option value="team_deathmatch">Team Deathmatch</option>
+            <option value="capture_the_flag">Capture the Flag</option>
+            <option value="king_of_the_hill">King of the Hill</option>
+          </select>
+
+          <select bind:value={leaderboardTimeRange} on:change={loadLeaderboard}>
+            <option value="">All Time</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+
+        {#if roomActions.isLoadingLeaderboardData()}
+          <div class="loading">Loading leaderboard...</div>
+        {:else if roomActions.getLeaderboardError()}
+          <div class="error">Error: {roomActions.getLeaderboardError()}</div>
+        {:else}
+          <div class="leaderboard-list">
+            {#each roomActions.getLeaderboardData() as entry, index}
+              <div class="leaderboard-entry {index < 3 ? 'top-' + (index + 1) : ''}">
+                <div class="rank">#{index + 1}</div>
+                <div class="player-info">
+                  <div class="player-name">{entry.playerName || `Player_${entry.playerId.slice(0, 8)}`}</div>
+                  <div class="player-id">{entry.playerId}</div>
+                </div>
+                <div class="score">{entry.score.toLocaleString()}</div>
+                <div class="game-mode">{roomUtils.formatGameMode(entry.gameMode)}</div>
+                <div class="date">{new Date(entry.timestamp).toLocaleDateString()}</div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -628,6 +726,152 @@
     cursor: not-allowed;
   }
 
+  /* Leaderboard Modal */
+  .leaderboard-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+  }
+
+  .leaderboard-content {
+    background: #1a1f2e;
+    border-radius: 12px;
+    padding: 2rem;
+    max-width: 800px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    color: white;
+  }
+
+  .leaderboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+  }
+
+  .leaderboard-header h3 {
+    margin: 0;
+    color: #4a9eff;
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+  }
+
+  .leaderboard-filters {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .leaderboard-filters select {
+    padding: 0.5rem;
+    background: #2d3748;
+    border: 1px solid #4a5568;
+    border-radius: 6px;
+    color: white;
+  }
+
+  .leaderboard-list {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .leaderboard-entry {
+    display: grid;
+    grid-template-columns: 50px 1fr 100px 120px 100px;
+    gap: 1rem;
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    background: #2d3748;
+    border-radius: 8px;
+    align-items: center;
+  }
+
+  .leaderboard-entry.top-1 {
+    background: linear-gradient(135deg, #ffd700, #ffb347);
+    color: #000;
+  }
+
+  .leaderboard-entry.top-2 {
+    background: linear-gradient(135deg, #c0c0c0, #a8a8a8);
+    color: #000;
+  }
+
+  .leaderboard-entry.top-3 {
+    background: linear-gradient(135deg, #cd7f32, #b87333);
+    color: #fff;
+  }
+
+  .rank {
+    font-weight: bold;
+    font-size: 1.2rem;
+    text-align: center;
+  }
+
+  .player-info {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .player-name {
+    font-weight: 600;
+  }
+
+  .player-id {
+    font-size: 0.8rem;
+    opacity: 0.7;
+  }
+
+  .score {
+    font-weight: bold;
+    font-size: 1.1rem;
+    text-align: right;
+  }
+
+  .game-mode {
+    text-align: center;
+    padding: 0.25rem 0.5rem;
+    background: #4a9eff;
+    border-radius: 4px;
+    font-size: 0.8rem;
+  }
+
+  .date {
+    text-align: center;
+    font-size: 0.9rem;
+    opacity: 0.8;
+  }
+
+  .leaderboard-btn {
+    background: #4a9eff;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s;
+  }
+
+  .leaderboard-btn:hover {
+    background: #3a8eef;
+  }
+
   @media (max-width: 768px) {
     .room-browser {
       padding: 1rem;
@@ -650,6 +894,15 @@
 
     .form-grid {
       grid-template-columns: 1fr;
+    }
+
+    .leaderboard-entry {
+      grid-template-columns: 40px 1fr 80px 100px 80px;
+      font-size: 0.9rem;
+    }
+
+    .leaderboard-filters {
+      flex-direction: column;
     }
   }
 </style>

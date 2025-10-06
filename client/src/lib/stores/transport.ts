@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import { webrtcStore, webrtcActions } from './webrtc';
+import { WebTransportClient } from '../transport/webtransport-client';
 
 export interface TransportConfig {
   type: 'webrtc' | 'websocket' | 'quic';
@@ -7,6 +8,7 @@ export interface TransportConfig {
   iceServers?: RTCIceServer[];
   sessionId?: string;
   priority: number;
+  serverUrl?: string; // For WebTransport
 }
 
 export interface TransportMessage {
@@ -159,6 +161,9 @@ class TransportManager {
       } else if (config.type === 'websocket') {
         // Handle WebSocket transport creation
         await this.createWebSocketTransport(transportId, config);
+      } else if (config.type === 'quic') {
+        // Handle QUIC/WebTransport creation
+        await this.createWebTransport(transportId, config);
       } else {
         // Send message to parent window for other transport types
         if (typeof window !== 'undefined') {
@@ -259,8 +264,76 @@ class TransportManager {
     }
   }
 
+  private async createWebTransport(transportId: string, config: TransportConfig): Promise<void> {
+    try {
+      const webTransportClient = new WebTransportClient({
+        serverUrl: config.serverUrl || 'https://localhost:8080',
+        sessionId: config.sessionId || `session_${transportId}`,
+        timeout: 5000,
+        maxRetries: 3
+      });
+
+      // Connect to WebTransport
+      await webTransportClient.connect();
+
+      // Set up message handling
+      webTransportClient.onMessage((message) => {
+        this.handleTransportEvent({
+          type: 'messageReceived',
+          transportId,
+          size: JSON.stringify(message).length,
+        });
+      });
+
+      // Monitor connection state
+      const checkConnection = () => {
+        const state = webTransportClient.getConnectionState();
+        if (state === 'connected') {
+          this.handleTransportEvent({
+            type: 'connected',
+            transportId,
+            transportType: 'quic',
+          });
+        } else if (state === 'disconnected') {
+          this.handleTransportEvent({
+            type: 'disconnected',
+            transportId,
+          });
+        }
+      };
+
+      // Check connection every second
+      const connectionTimer = setInterval(checkConnection, 1000);
+
+      // Store WebTransport client reference
+      this.transports.set(transportId, {
+        type: 'quic',
+        client: webTransportClient,
+        connectionTimer
+      });
+
+      console.log('WebTransport initialized:', transportId);
+    } catch (error) {
+      console.error('Failed to create WebTransport:', error);
+      throw error;
+    }
+  }
+
   async removeTransport(transportId: string): Promise<void> {
     console.log('Removing transport:', transportId);
+
+    // Get transport info and clean up properly
+    const transportInfo = this.transports.get(transportId);
+    if (transportInfo) {
+      if (transportInfo.type === 'websocket' && transportInfo.connection) {
+        transportInfo.connection.close();
+      } else if (transportInfo.type === 'quic' && transportInfo.client) {
+        await transportInfo.client.disconnect();
+        if (transportInfo.connectionTimer) {
+          clearInterval(transportInfo.connectionTimer);
+        }
+      }
+    }
 
     // Send message to parent window to close transport
     if (typeof window !== 'undefined') {
@@ -284,9 +357,20 @@ class TransportManager {
       return;
     }
 
-    // Fallback to transport manager for other transport types
+    // Check for WebTransport
     const state = transportStore.getState?.();
     if (state?.bestTransport) {
+      const transportInfo = this.transports.get(state.bestTransport);
+      if (transportInfo?.type === 'quic' && transportInfo.client) {
+        try {
+          await transportInfo.client.sendMessage(message);
+          return;
+        } catch (error) {
+          console.error('Failed to send via WebTransport:', error);
+        }
+      }
+
+      // Fallback to postMessage for other transport types
       if (typeof window !== 'undefined') {
         window.postMessage({
           type: 'transport-message',

@@ -6,17 +6,15 @@ use std::{
 };
 use tokio::{
     sync::{broadcast, RwLock},
-    time::{interval, Interval},
+    time::interval,
 };
-use tracing::{debug, error, info, warn};
-use uuid::Uuid;
+use tracing::{info, warn};
 
 use super::{
     traits::{Transport, TransportFactory, TransportManager, TransportManagerStats},
-    TransportConfig, TransportError, TransportEvent, TransportMessage,
-    TransportStats, TransportType, ConnectionState, MessageType,
+    TransportConfig, TransportError, TransportEvent, TransportMessage, TransportType, MessageType,
 };
-use crate::compression::{Compression, CompressionConfig, CompressedData};
+use crate::compression::CompressionConfig;
 
 /// Default transport manager implementation
 pub struct DefaultTransportManager {

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use chrono::{DateTime, Utc};
 
 /// Body cho POST /inputs

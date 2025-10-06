@@ -1,4 +1,4 @@
-use worker::{WorkerConfig, simulation::{GameWorld, spawn_test_entities}, database::PocketBaseClient, room::RoomManager};
+use worker::{WorkerConfig, simulation::{GameWorld, spawn_test_entities, EncodedSnapshot}, database::PocketBaseClient, room::RoomManager, run_with_ctrl_c};
 use common_net::telemetry;
 use std::time::{Duration, Instant};
 use tokio::time;
@@ -95,8 +95,18 @@ async fn main() {
             let sim_time = sim_start.elapsed();
 
             // Send snapshot to clients (placeholder) - chỉ tick nếu có entities
-            if frame_count % 600 == 0 && !snapshot.entities.is_empty() { // Log mỗi 10 giây
-                tracing::debug!("Game snapshot: {} entities at tick {}", snapshot.entities.len(), snapshot.tick);
+            if frame_count % 600 == 0 {
+                match &snapshot {
+                    EncodedSnapshot::Full(full) => {
+                        if !full.entities.is_empty() {
+                            tracing::debug!("Game snapshot: {} entities at tick {}", full.entities.len(), snapshot.tick());
+                        }
+                    }
+                    EncodedSnapshot::Delta(delta) => {
+                        let total_entities = delta.created_entities.len() + delta.updated_entities.len() + delta.deleted_entities.len();
+                        tracing::debug!("Delta snapshot: {} changes at tick {}", total_entities, snapshot.tick());
+                    }
+                }
             }
 
             // Periodic database sync (every DB_SYNC_INTERVAL frames) - just increment counter

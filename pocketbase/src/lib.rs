@@ -354,8 +354,8 @@ impl PocketBaseClient {
     }
 
     /// Subscribe to real-time updates
-    pub async fn subscribe(&self, collection: &str, callback: impl Fn(Value) + Send + 'static) -> Result<(), PocketBaseError> {
-        let url = format!("{}/api/realtime", self.base_url);
+    pub async fn subscribe(&self, collection: &str, _callback: impl Fn(Value) + Send + 'static) -> Result<(), PocketBaseError> {
+        let _url = format!("{}/api/realtime", self.base_url);
 
         // For now, just log subscription (real implementation would use WebSocket)
         info!("Subscribing to collection: {}", collection);

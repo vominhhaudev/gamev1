@@ -21,6 +21,8 @@
   },
   "dependencies": {
     "@sveltejs/adapter-auto": "^6.1.1",
+    "eventemitter3": "^5.0.1",
+    "lz4": "^0.6.5",
     "three": "^0.168.0"
   }
 }

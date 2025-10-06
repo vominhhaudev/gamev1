@@ -14,14 +14,67 @@
     let obstacleMeshes = [];
     let pickupMeshes = [];
 
+    // Game state - kết nối với multiplayer stores
+    import { gameState, gameService, gameActions } from '$lib/stores/game';
+
+    // Import stores for connection status and authentication
+    import { isConnected } from '$lib/stores/game';
+    import { authStore, authActions } from '$lib/stores/auth';
+
+    // Error display state
+    let errorMessage = '';
+    let showErrorModal = false;
+
     // Game state
     let isRunning = false;
     let isGameStarted = false;
+    let isPaused = false;
+    let isGameOver = false;
+
+    // Authentication state
+    let user = null;
+    let isAuthenticated = false;
     let playerPosition = { x: 0, y: 0, z: 0 };
     let cameraPosition = { x: 0, y: 8, z: 15 }; // Camera behind and above player
     let score = 0;
     let speed = 1;
     let gameTime = 0;
+
+    // Multiplayer state
+    let multiplayerEntities = [];
+    let lastSnapshotTick = 0;
+
+    // Subscribe to game state từ server
+    gameState.subscribe(snapshot => {
+        if (snapshot) {
+            multiplayerEntities = snapshot.entities || [];
+            lastSnapshotTick = snapshot.tick || 0;
+            console.log('📡 Received multiplayer snapshot:', snapshot.tick, 'entities:', multiplayerEntities.length);
+        }
+    });
+
+    // Subscribe to authentication state
+    authStore.subscribe(state => {
+        user = state.user;
+        isAuthenticated = state.isAuthenticated;
+    });
+
+    // Multiplayer integration
+    let otherPlayers = [];
+    let multiplayerEnabled = false;
+
+    // Subscribe to multiplayer entities
+    gameState.subscribe(snapshot => {
+        if (snapshot && snapshot.entities) {
+            // Update multiplayer entities (excluding current player)
+            otherPlayers = snapshot.entities.filter(entity =>
+                entity.player && entity.player_id !== user?.id
+            );
+
+            multiplayerEnabled = otherPlayers.length > 0;
+            console.log('🎮 Multiplayer entities:', otherPlayers.length, 'other players');
+        }
+    });
 
     // Lane system for endless runner
     const LANES = [-4, 0, 4]; // Wider lanes
@@ -69,88 +122,292 @@
     let lastFpsUpdate = 0;
     let fps = 60;
     let particlePool = [];
-    let maxParticles = 100;
+    let maxParticles = 50; // Reduced for better performance
+    let adaptiveParticleCount = 50;
 
     onMount(async () => {
-        console.log('🚀 Starting Endless Runner 3D initialization...');
-        initThreeJS();
-        console.log('🔧 Three.js initialized, scene:', !!scene, 'camera:', !!camera, 'renderer:', !!renderer);
-        setupLighting();
-        setupFog();
-        createPlayer();
-        console.log('🎮 Player created, calling createInitialTrack...');
-        createInitialTrack();
-        createParticlePool();
+        let initializationStarted = false;
 
-        // Initialize audio after basic setup
-        await initAudio();
+        try {
+            console.log('🚀 Starting Endless Runner 3D initialization...');
+            initializationStarted = true;
 
-        setupEventListeners();
-        console.log('✅ Endless Runner 3D initialization complete');
+            // Check if WebGL is supported
+            if (!isWebGLSupported()) {
+                throw new Error('WebGL is not supported in this browser. Please ensure your browser supports WebGL or update your graphics drivers.');
+            }
+
+            // Check if container exists (only on browser)
+            if (typeof document === 'undefined') {
+                throw new Error('Document not available');
+            }
+
+            const container = document.getElementById('game3d-container');
+            if (!container) {
+                throw new Error('Game 3D container element not found. Make sure the HTML element with id "game3d-container" exists.');
+            }
+
+            // Ensure container is visible and has dimensions
+            if (container.clientWidth === 0 || container.clientHeight === 0) {
+                console.warn('⚠️ Container has no dimensions, waiting for layout...');
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            console.log('✅ Environment checks passed');
+
+            // Initialize Three.js with proper error handling
+            await initThreeJSAsync();
+
+            if (!scene || !camera || !renderer) {
+                throw new Error('Failed to initialize Three.js components - scene, camera, or renderer is null');
+            }
+
+            console.log('✅ Three.js initialized successfully');
+
+            // Setup scene components
+            setupLighting();
+            setupFog();
+            await createPlayer();
+            await createInitialTrack();
+            createParticlePool();
+
+            // Initialize audio
+            await initAudio();
+
+            setupEventListeners();
+            console.log('✅ Endless Runner 3D initialization complete');
+
+        } catch (error) {
+            console.error('❌ Error during Endless Runner 3D initialization:', error);
+
+            // Provide more specific error messages
+            let userFriendlyMessage = error.message;
+            if (error.message.includes('WebGL')) {
+                userFriendlyMessage = 'Your browser does not support WebGL. Please try updating your browser or graphics drivers.';
+            } else if (error.message.includes('container')) {
+                userFriendlyMessage = 'Game container not found. Please refresh the page and try again.';
+            }
+
+            showError(`Initialization failed: ${userFriendlyMessage}`);
+        }
     });
 
     onDestroy(() => {
+        console.log('🧹 Cleaning up Endless Runner 3D...');
+
+        // Stop animation loop
         if (animationId) {
             cancelAnimationFrame(animationId);
+            animationId = null;
         }
+
+        // Dispose renderer and WebGL context
         if (renderer) {
             renderer.dispose();
+
+            // Remove canvas from DOM (only on browser)
+            if (typeof document !== 'undefined' && renderer.domElement && renderer.domElement.parentNode) {
+                renderer.domElement.parentNode.removeChild(renderer.domElement);
+            }
+            renderer = null;
         }
-        // Remove event listeners that were actually added
-        window.removeEventListener('keydown', handleKeyDown);
-        window.removeEventListener('resize', onWindowResize);
+
+        // Remove event listeners that were actually added (only on browser)
+        if (typeof window !== 'undefined') {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('resize', onWindowResize);
+        }
+
+        // Clear all meshes and objects
+        if (scene) {
+            scene.clear();
+            scene = null;
+        }
+
+        camera = null;
+
+        // Clear arrays
+        trackMeshes = [];
+        obstacleMeshes = [];
+        pickupMeshes = [];
+        particles = [];
+        trails = [];
+
+        console.log('✅ Endless Runner 3D cleanup complete');
     });
 
-    function initThreeJS() {
+    // Check if WebGL is supported - enhanced version with better error handling
+    function isWebGLSupported() {
         try {
-            console.log('🔧 Initializing Three.js...');
-            const container = document.getElementById('game3d-container');
-            if (!container) {
-                console.error('❌ Game 3D container not found');
-                return;
+            // Check if we're in a browser environment
+            if (typeof window === 'undefined') {
+                console.warn('❌ Not in browser environment');
+                return false;
             }
-            console.log('✅ Container found');
 
-            // Scene setup
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87CEEB); // Sky blue
+            // Check if document is available (only on browser)
+            if (typeof document === 'undefined') {
+                return false;
+            }
 
-        // Camera setup (third-person follow)
-        camera = new THREE.PerspectiveCamera(
-            75, // Increased FOV to see more of the track
-            window.innerWidth / window.innerHeight,
-            0.1,
-            2000
-        );
-        if (camera) {
-            camera.position.set(cameraPosition.x, cameraPosition.y, cameraPosition.z);
-            // Set initial camera look at to see the track and player
-            camera.lookAt(0, 0, playerPosition.z - 5); // Look slightly ahead of player on the track
+            const canvas = document.createElement('canvas');
+
+            // Test WebGL 2.0 first (preferred)
+            let gl = canvas.getContext('webgl2');
+            if (gl) {
+                console.log('✅ WebGL 2.0 supported');
+                return true;
+            }
+
+            // Fallback to WebGL 1.0
+            gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (gl) {
+                console.log('✅ WebGL 1.0 supported');
+                return true;
+            }
+
+            // Check for software rendering fallback
+            try {
+                gl = canvas.getContext('webgl', { failIfMajorPerformanceCaveat: false });
+                if (gl) {
+                    console.log('✅ Software WebGL supported');
+                    return true;
+                }
+            } catch (e) {
+                // Ignore software rendering errors
+            }
+
+            console.warn('❌ WebGL not supported. Possible causes:');
+            console.warn('  - Browser doesn\'t support WebGL');
+            console.warn('  - Graphics drivers need updating');
+            console.warn('  - Hardware acceleration disabled');
+            console.warn('  - Browser security restrictions');
+            return false;
+        } catch (e) {
+            console.error('❌ Error checking WebGL support:', e);
+            return false;
+        }
+    }
+
+    // Show error modal and fallback content
+    function showError(message) {
+        console.error('🚨 Game Error:', message);
+
+        // Dispatch custom event to parent component (only on browser)
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('gameError', {
+                detail: { message }
+            }));
         }
 
-        // Renderer setup với enhanced quality
-        renderer = new THREE.WebGLRenderer({
-            antialias: true,
-            powerPreference: "high-performance",
-            alpha: false
+        // Show fallback content for WebGL issues (only on browser)
+        if (typeof document !== 'undefined' && message.includes('WebGL')) {
+            const fallbackElement = document.querySelector('.webgl-fallback');
+            if (fallbackElement) {
+                fallbackElement.style.display = 'block';
+            }
+        }
+
+        // Also set local error state as fallback
+        errorMessage = message;
+        showErrorModal = true;
+    }
+
+    // Async Three.js initialization with better error handling
+    async function initThreeJSAsync() {
+        return new Promise((resolve, reject) => {
+            try {
+                console.log('🔧 Initializing Three.js...');
+
+                // Wait for DOM to be ready
+                if (typeof window === 'undefined') {
+                    throw new Error('Window not available');
+                }
+
+                // Check if document is available (only on browser)
+                if (typeof document === 'undefined') {
+                    throw new Error('Document not available');
+                }
+
+                const container = document.getElementById('game3d-container');
+                if (!container) {
+                    throw new Error('Game 3D container element not found. Make sure the HTML element with id "game3d-container" exists.');
+                }
+
+                console.log('✅ Container found');
+
+                // Scene setup
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x87CEEB); // Sky blue
+
+                // Camera setup (third-person follow)
+                camera = new THREE.PerspectiveCamera(
+                    75, // Increased FOV to see more of the track
+                    window.innerWidth / window.innerHeight,
+                    0.1,
+                    2000
+                );
+
+                if (!camera) {
+                    throw new Error('Failed to create camera');
+                }
+
+                camera.position.set(cameraPosition.x, cameraPosition.y, cameraPosition.z);
+                camera.lookAt(0, 0, playerPosition.z - 5);
+
+                // Optimized renderer setup for better performance
+                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                const pixelRatio = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2);
+
+                let rendererOptions = {
+                    antialias: !isMobile, // Disable antialias on mobile for better performance
+                    powerPreference: "high-performance",
+                    alpha: false,
+                    failIfMajorPerformanceCaveat: false,
+                    stencil: false, // Disable stencil buffer if not needed
+                    depth: true,
+                    logarithmicDepthBuffer: false
+                };
+
+                // Try to create renderer with optimized settings
+                renderer = new THREE.WebGLRenderer(rendererOptions);
+
+                if (!renderer) {
+                    throw new Error('Failed to create WebGL renderer');
+                }
+
+                console.log('✅ WebGL renderer created successfully');
+
+                // Set size with performance considerations
+                const renderWidth = Math.floor(window.innerWidth * 0.8);
+                const renderHeight = Math.floor(window.innerHeight * 0.8);
+                renderer.setSize(renderWidth, renderHeight, false); // Don't update style
+
+                // Adaptive pixel ratio for performance
+                renderer.setPixelRatio(pixelRatio);
+
+                // Optimized shadow settings
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.shadowMap.autoUpdate = false; // Manual shadow updates for performance
+
+                // Performance optimizations
+                renderer.toneMappingExposure = 1.0; // Reduced for better performance
+
+                container.appendChild(renderer.domElement);
+
+                // Handle window resize (only on browser)
+                if (typeof window !== 'undefined') {
+                    window.addEventListener('resize', onWindowResize, false);
+                }
+
+                console.log('✅ Three.js initialized successfully');
+                resolve();
+            } catch (error) {
+                console.error('❌ Error initializing Three.js:', error);
+                reject(error);
+            }
         });
-        renderer.setSize(window.innerWidth * 0.8, window.innerHeight * 0.8);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        renderer.shadowMap.autoUpdate = true;
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.2;
-        container.appendChild(renderer.domElement);
-
-        // Handle window resize
-        window.addEventListener('resize', onWindowResize, false);
-
-        console.log('✅ Three.js initialized successfully');
-        } catch (error) {
-            console.error('❌ Error initializing Three.js:', error);
-        }
     }
 
     function onWindowResize() {
@@ -206,11 +463,16 @@
         scene.fog = new THREE.Fog(0x87CEEB, 100, 500);
     }
 
-    function createPlayer() {
-        if (!scene) return;
+    async function createPlayer() {
+        if (!scene) {
+            throw new Error('Scene not initialized');
+        }
 
-        // Create player as a more detailed 3D character
-        const playerGroup = new THREE.Group();
+        try {
+            console.log('🎮 Creating player...');
+
+            // Create player as a more detailed 3D character
+            const playerGroup = new THREE.Group();
 
         // Body - enhanced material
         const bodyGeometry = new THREE.CapsuleGeometry(0.4, 1.2, 4, 8);
@@ -278,23 +540,27 @@
         rightLeg.receiveShadow = true;
         playerGroup.add(rightLeg);
 
-        // Set initial position at the start of the track
-        playerGroup.position.set(LANES[currentLane], 0.1, 0); // Start at z=0
-        playerMesh = playerGroup;
-        scene.add(playerMesh);
+            // Set initial position at the start of the track
+            playerGroup.position.set(LANES[currentLane], 0.1, 0); // Start at z=0
+            playerMesh = playerGroup;
+            scene.add(playerMesh);
 
-        console.log('✅ Player created at position:', playerMesh.position);
-        console.log('Player mesh children:', playerMesh.children.length);
+            console.log('✅ Player created at position:', playerMesh.position);
+            console.log('Player mesh children:', playerMesh.children.length);
 
-        // Ensure player is visible
-        playerMesh.visible = true;
-        playerMesh.children.forEach(child => {
-            child.visible = true;
-        });
+        } catch (error) {
+            console.error('❌ Error creating player:', error);
+            throw error;
+        }
     }
 
-    function createInitialTrack() {
-        if (!scene) return;
+    async function createInitialTrack() {
+        if (!scene) {
+            throw new Error('Scene not initialized');
+        }
+
+        try {
+            console.log('🏗️ Creating initial track...');
 
         // Create initial track segments BEHIND the player (negative Z)
         for (let i = 0; i < 6; i++) {
@@ -338,16 +604,23 @@
             });
         });
 
-        // Debug: Check if track is visible from camera
-        if (trackMeshes[0] && camera) {
-            const trackPos = trackMeshes[0].position;
-            const cameraPos = camera.position;
-            const distance = Math.sqrt(
-                Math.pow(trackPos.x - cameraPos.x, 2) +
-                Math.pow(trackPos.y - cameraPos.y, 2) +
-                Math.pow(trackPos.z - cameraPos.z, 2)
-            );
-            console.log('Distance from camera to first track:', distance);
+            // Debug: Check if track is visible from camera
+            if (trackMeshes[0] && camera) {
+                const trackPos = trackMeshes[0].position;
+                const cameraPos = camera.position;
+                const distance = Math.sqrt(
+                    Math.pow(trackPos.x - cameraPos.x, 2) +
+                    Math.pow(trackPos.y - cameraPos.y, 2) +
+                    Math.pow(trackPos.z - cameraPos.z, 2)
+                );
+                console.log('Distance from camera to first track:', distance);
+            }
+
+            console.log('✅ Initial track created successfully');
+
+        } catch (error) {
+            console.error('❌ Error creating initial track:', error);
+            throw error;
         }
     }
 
@@ -413,7 +686,9 @@
     }
 
     function setupEventListeners() {
-        window.addEventListener('keydown', handleKeyDown);
+        if (typeof window !== 'undefined') {
+            window.addEventListener('keydown', handleKeyDown);
+        }
     }
 
     function handleKeyDown(event) {
@@ -427,29 +702,57 @@
                 event.preventDefault();
                 if (!isJumping) {
                     jump();
+                    sendInputToServer('jump');
                 }
                 break;
             case 'KeyA':
             case 'ArrowLeft':
                 event.preventDefault();
                 changeLane(-1);
+                sendInputToServer('move_left');
                 break;
             case 'KeyD':
             case 'ArrowRight':
                 event.preventDefault();
                 changeLane(1);
+                sendInputToServer('move_right');
                 break;
             case 'KeyS':
             case 'ArrowDown':
                 event.preventDefault();
                 if (!isSliding) {
                     slide();
+                    sendInputToServer('slide');
                 }
                 break;
             case 'KeyR':
                 event.preventDefault();
                 resetGame();
+                sendInputToServer('reset');
                 break;
+            case 'KeyP':
+            case 'Escape':
+                event.preventDefault();
+                togglePause();
+                sendInputToServer('pause');
+                break;
+        }
+    }
+
+    // Send input to multiplayer server
+    function sendInputToServer(action) {
+        if (isAuthenticated && gameActions.isConnected()) {
+            const input = {
+                player_id: user?.id,
+                movement: {
+                    action: action,
+                    lane: currentLane,
+                    position: { x: playerMesh?.position.x || 0, y: playerMesh?.position.y || 0, z: playerMesh?.position.z || 0 },
+                    timestamp: Date.now()
+                },
+                timestamp: Date.now()
+            };
+            gameService.sendInput(input);
         }
     }
 
@@ -511,6 +814,20 @@
         return t * (2 - t);
     }
 
+    function togglePause() {
+        if (!isGameStarted) return;
+
+        isPaused = !isPaused;
+
+        if (isPaused) {
+            console.log('⏸️ Game paused');
+            playSound('pause', 0.5);
+        } else {
+            console.log('▶️ Game resumed');
+            lastFrameTime = performance.now(); // Reset frame timing for smooth resume
+        }
+    }
+
     function resetGame() {
         isGameStarted = false;
         isRunning = false;
@@ -559,24 +876,71 @@
         console.log('🔄 Game reset');
     }
 
-    function gameLoop() {
-        if (!isRunning) return;
+    // Performance tracking
+    let lastFrameTime = 0;
+    let fpsUpdateTimer = 0;
+
+    function gameLoop(currentTime = 0) {
+        if (!isRunning || isPaused) return;
 
         try {
-            const deltaTime = 0.016; // ~60 FPS
+            // Calculate adaptive delta time for smooth performance
+            const deltaTime = Math.min((currentTime - lastFrameTime) / 1000, 1/30); // Cap at 30 FPS minimum
+            lastFrameTime = currentTime;
             gameTime += deltaTime;
 
+            // Update game systems with adaptive timing
             updateGame(deltaTime);
             updatePhysics(deltaTime);
             updatePowerUps();
             updateCamera();
-            updateFPS();
+
+            // Update FPS counter less frequently for performance
+            fpsUpdateTimer += deltaTime;
+            if (fpsUpdateTimer >= 0.5) { // Update FPS every 0.5 seconds
+                updateFPS();
+                fpsUpdateTimer = 0;
+            }
+
+            // Render with performance considerations
             render();
 
             animationId = requestAnimationFrame(gameLoop);
         } catch (error) {
             console.error('❌ Error in game loop:', error);
             isRunning = false;
+        }
+
+        // Sync với multiplayer entities nếu có
+        syncWithMultiplayer();
+    }
+
+    // Sync local game state với multiplayer entities
+    function syncWithMultiplayer() {
+        if (multiplayerEntities.length > 0 && gameActions.isConnected()) {
+            // Tìm player entity trong multiplayer state
+            const playerEntity = multiplayerEntities.find(e => e.player);
+
+            if (playerEntity) {
+                // Sync player position từ server nếu khác biệt đáng kể
+                const serverPos = playerEntity.transform.position;
+                const localPos = playerMesh?.position;
+
+                if (localPos && (Math.abs(serverPos.x - localPos.x) > 0.5 || Math.abs(serverPos.z - localPos.z) > 0.5)) {
+                    // Smooth interpolation để tránh teleport
+                    localPos.x += (serverPos.x - localPos.x) * 0.1;
+                    localPos.z += (serverPos.z - localPos.z) * 0.1;
+                    localPos.y = serverPos.y;
+
+                    console.log('🔄 Syncing player position from server');
+                }
+
+                // Sync lane từ server
+                if (playerEntity.lane !== undefined && playerEntity.lane !== currentLane) {
+                    currentLane = playerEntity.lane;
+                    console.log('🔄 Syncing lane from server:', currentLane);
+                }
+            }
         }
     }
 
@@ -738,6 +1102,108 @@
 
 
 
+    // Render other players in multiplayer
+    function renderMultiplayerPlayers() {
+        if (!multiplayerEnabled || otherPlayers.length === 0) return;
+
+        otherPlayers.forEach(playerEntity => {
+            if (!playerEntity.player || !playerEntity.transform) return;
+
+            // Create or update mesh for other players
+            let playerMesh = scene.getObjectByName(`multiplayer_player_${playerEntity.player_id}`);
+
+            if (!playerMesh) {
+                // Create new player mesh for multiplayer
+                playerMesh = createMultiplayerPlayerMesh(playerEntity.player_id);
+                playerMesh.name = `multiplayer_player_${playerEntity.player_id}`;
+                scene.add(playerMesh);
+                console.log('🎮 Created multiplayer player mesh:', playerEntity.player_id);
+            }
+
+            // Update position and animation
+            if (playerEntity.transform.position) {
+                // Smooth interpolation for better visual experience
+                const targetPos = playerEntity.transform.position;
+                const currentPos = playerMesh.position;
+
+                // Lerp position for smooth movement
+                playerMesh.position.x += (targetPos.x - currentPos.x) * 0.1;
+                playerMesh.position.y = targetPos.y || 0;
+                playerMesh.position.z += (targetPos.z - currentPos.z) * 0.1;
+
+                // Update lane based on position
+                const laneIndex = Math.round((playerMesh.position.x + 4) / 4);
+                if (laneIndex >= 0 && laneIndex < LANES.length) {
+                    playerMesh.userData.currentLane = laneIndex;
+                }
+
+                // Add subtle animation
+                const time = Date.now() * 0.005;
+                playerMesh.position.y += Math.sin(time + playerEntity.player_id.length) * 0.05;
+            }
+        });
+
+        // Clean up disconnected players
+        cleanupDisconnectedPlayers();
+    }
+
+    function createMultiplayerPlayerMesh(playerId) {
+        const group = new THREE.Group();
+
+        // Body - different color for each player
+        const hue = (playerId.length * 137) % 360; // Generate unique color
+        const bodyGeometry = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8);
+        const bodyMaterial = new THREE.MeshLambertMaterial({
+            color: new THREE.Color().setHSL(hue / 360, 0.7, 0.5),
+            emissive: new THREE.Color().setHSL(hue / 360, 0.3, 0.1),
+            emissiveIntensity: 0.2
+        });
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        body.position.y = 0.5;
+        body.castShadow = true;
+        body.receiveShadow = true;
+        group.add(body);
+
+        // Head
+        const headGeometry = new THREE.SphereGeometry(0.25, 8, 8);
+        const headMaterial = new THREE.MeshLambertMaterial({
+            color: new THREE.Color().setHSL(hue / 360, 0.6, 0.7),
+        });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.y = 1.5;
+        head.castShadow = true;
+        group.add(head);
+
+        // Add glow effect for multiplayer players
+        const glowGeometry = new THREE.SphereGeometry(0.6, 8, 8);
+        const glowMaterial = new THREE.MeshBasicMaterial({
+            color: new THREE.Color().setHSL(hue / 360, 0.8, 0.6),
+            transparent: true,
+            opacity: 0.3
+        });
+        const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+        group.add(glow);
+
+        return group;
+    }
+
+    function cleanupDisconnectedPlayers() {
+        // Find all multiplayer player meshes
+        const multiplayerMeshes = scene.children.filter(child =>
+            child.name && child.name.startsWith('multiplayer_player_')
+        );
+
+        multiplayerMeshes.forEach(mesh => {
+            const playerId = mesh.name.replace('multiplayer_player_', '');
+            const stillConnected = otherPlayers.some(player => player.player_id === playerId);
+
+            if (!stillConnected) {
+                console.log('🧹 Removing disconnected player:', playerId);
+                scene.remove(mesh);
+            }
+        });
+    }
+
     function render() {
         if (renderer && scene && camera && isRunning) {
             try {
@@ -780,7 +1246,10 @@
                 }
             });
 
-                renderer.render(scene, camera);
+            // Render other players
+            renderMultiplayerPlayers();
+
+            renderer.render(scene, camera);
             } catch (error) {
                 console.error('❌ Error during render:', error);
             }
@@ -944,18 +1413,23 @@
 
     // Performance optimization functions
     function createParticlePool() {
+        // Create shared geometry and material for better memory efficiency
+        const sharedGeometry = new THREE.SphereGeometry(0.05, 4, 4);
+        const sharedMaterial = new THREE.MeshBasicMaterial({
+            color: 0x4a9eff,
+            transparent: true,
+            opacity: 0.8
+        });
+
         for (let i = 0; i < maxParticles; i++) {
-            const geometry = new THREE.SphereGeometry(0.05, 4, 4);
-            const material = new THREE.MeshBasicMaterial({
-                color: 0x4a9eff,
-                transparent: true,
-                opacity: 0.8
-            });
-            const particle = new THREE.Mesh(geometry, material);
+            const particle = new THREE.Mesh(sharedGeometry, sharedMaterial);
             particle.visible = false;
+            particle.frustumCulled = false; // Disable frustum culling for particles
             particlePool.push(particle);
             scene.add(particle);
         }
+
+        console.log(`✅ Created particle pool with ${maxParticles} particles`);
     }
 
     function getPooledParticle() {
@@ -965,6 +1439,31 @@
             return particle;
         }
         return null;
+    }
+
+    function getBrowserInfo() {
+        if (typeof navigator === 'undefined') return 'Server';
+        return `${navigator.userAgent.includes('Chrome') ? 'Chrome' :
+                navigator.userAgent.includes('Firefox') ? 'Firefox' :
+                navigator.userAgent.includes('Safari') ? 'Safari' :
+                navigator.userAgent.includes('Edge') ? 'Edge' : 'Unknown'} ${navigator.platform || 'Unknown'}`;
+    }
+
+    function getWebGLInfo() {
+        try {
+            if (typeof document === 'undefined') return 'Server-side';
+
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (gl) {
+                const renderer = gl.getParameter(gl.RENDERER) || 'Unknown';
+                const vendor = gl.getParameter(gl.VENDOR) || 'Unknown';
+                return `Hardware (${renderer.substring(0, 30)}...)`;
+            }
+            return 'Not available';
+        } catch (e) {
+            return 'Error detecting';
+        }
     }
 
     function returnParticleToPool(particle) {
@@ -981,11 +1480,21 @@
             frameCount = 0;
             lastFpsUpdate = now;
 
-            // Adaptive quality based on FPS
-            if (fps < 30 && maxParticles > 50) {
-                maxParticles = 50; // Reduce particle count for better performance
-            } else if (fps > 50 && maxParticles < 100) {
-                maxParticles = 100; // Increase particle count when performance is good
+            // Adaptive quality based on FPS with more granular control
+            if (fps < 25) {
+                adaptiveParticleCount = Math.max(20, adaptiveParticleCount - 10); // Aggressive reduction
+            } else if (fps < 35) {
+                adaptiveParticleCount = Math.max(30, adaptiveParticleCount - 5); // Moderate reduction
+            } else if (fps > 55) {
+                adaptiveParticleCount = Math.min(80, adaptiveParticleCount + 5); // Gradual increase
+            } else if (fps > 60) {
+                adaptiveParticleCount = Math.min(100, adaptiveParticleCount + 2); // Very gradual increase
+            }
+
+            // Update maxParticles if needed
+            if (adaptiveParticleCount !== maxParticles) {
+                maxParticles = adaptiveParticleCount;
+                console.log(`🎛️ Adaptive particle count: ${maxParticles} (FPS: ${fps})`);
             }
         }
     }
@@ -1126,41 +1635,84 @@
         // Create procedural sound effects since we don't have audio files
         // In a real game, you would load actual audio files here
 
-        // Jump sound - short ascending tone
-        const jumpBuffer = createProceduralSound(0.3, (time) => {
-            return Math.sin(2 * Math.PI * 440 * time) * Math.exp(-time * 3) * 0.3;
+        // Jump sound - enhanced ascending tone with attack
+        const jumpBuffer = createProceduralSound(0.4, (time) => {
+            const freq = 440 + (time * 200); // Frequency sweep up
+            const envelope = Math.min(time * 10, 1) * Math.exp(-time * 2); // Attack and decay
+            return Math.sin(2 * Math.PI * freq * time) * envelope * 0.4;
         });
         if (jumpBuffer) soundBuffers.set('jump', jumpBuffer);
 
-        // Landing sound - short descending tone
-        const landingBuffer = createProceduralSound(0.2, (time) => {
-            return Math.sin(2 * Math.PI * 220 * time) * Math.exp(-time * 5) * 0.4;
+        // Landing sound - soft impact with bass
+        const landingBuffer = createProceduralSound(0.3, (time) => {
+            const freq1 = 150; // Low frequency for impact
+            const freq2 = 80;  // Even lower for bass
+            const envelope = Math.exp(-time * 8) * (1 - time * 2);
+            return (Math.sin(2 * Math.PI * freq1 * time) * 0.6 + Math.sin(2 * Math.PI * freq2 * time) * 0.4) * envelope;
         });
         if (landingBuffer) soundBuffers.set('landing', landingBuffer);
 
-        // Pickup sound - pleasant ascending arpeggio
-        const pickupBuffer = createProceduralSound(0.4, (time) => {
-            const note1 = Math.sin(2 * Math.PI * 523 * time) * Math.exp(-time * 2); // C5
-            const note2 = Math.sin(2 * Math.PI * 659 * time * 1.1) * Math.exp(-time * 2) * 0.7; // E5
-            const note3 = Math.sin(2 * Math.PI * 784 * time * 1.2) * Math.exp(-time * 2) * 0.5; // G5
-            return (note1 + note2 + note3) * 0.2;
+        // Pickup sound - rich chord progression
+        const pickupBuffer = createProceduralSound(0.5, (time) => {
+            const chordProgression = [
+                { freq: 523, amp: 1.0 },  // C5
+                { freq: 659, amp: 0.8 },  // E5
+                { freq: 784, amp: 0.6 },  // G5
+                { freq: 1047, amp: 0.4 }  // C6
+            ];
+
+            let output = 0;
+            chordProgression.forEach(note => {
+                const envelope = Math.exp(-time * 3) * (1 - Math.pow(time, 0.5));
+                output += Math.sin(2 * Math.PI * note.freq * time) * note.amp * envelope;
+            });
+
+            return output * 0.25;
         });
         if (pickupBuffer) soundBuffers.set('pickup', pickupBuffer);
 
-        // Collision sound - harsh noise
-        const collisionBuffer = createProceduralSound(0.5, (time) => {
-            return (Math.random() - 0.5) * Math.exp(-time * 2) * 0.6;
+        // Collision sound - more realistic crash
+        const collisionBuffer = createProceduralSound(0.6, (time) => {
+            const noise = (Math.random() - 0.5) * 2;
+            const lowFreq = Math.sin(2 * Math.PI * 100 * time) * 0.3;
+            const highFreq = Math.sin(2 * Math.PI * 800 * time) * 0.1;
+            const envelope = Math.exp(-time * 4) * Math.pow(1 - time * 2, 2);
+            return (noise + lowFreq + highFreq) * envelope;
         });
         if (collisionBuffer) soundBuffers.set('collision', collisionBuffer);
 
-        // Power-up sound - magical ascending chord
-        const powerupBuffer = createProceduralSound(0.8, (time) => {
-            const note1 = Math.sin(2 * Math.PI * 523 * time) * Math.exp(-time * 1); // C5
-            const note2 = Math.sin(2 * Math.PI * 659 * time) * Math.exp(-time * 1) * 0.8; // E5
-            const note3 = Math.sin(2 * Math.PI * 784 * time) * Math.exp(-time * 1) * 0.6; // G5
-            return (note1 + note2 + note3) * 0.3;
+        // Power-up sound - magical ascending chord with reverb-like effect
+        const powerupBuffer = createProceduralSound(1.0, (time) => {
+            const notes = [523, 659, 784, 1047]; // C5, E5, G5, C6
+            let output = 0;
+
+            notes.forEach((freq, index) => {
+                const noteTime = time - (index * 0.1); // Staggered timing
+                if (noteTime > 0) {
+                    const envelope = Math.exp(-noteTime * 2) * Math.min(noteTime * 8, 1);
+                    output += Math.sin(2 * Math.PI * freq * noteTime) * envelope * 0.3;
+                }
+            });
+
+            return output;
         });
         if (powerupBuffer) soundBuffers.set('powerup', powerupBuffer);
+
+        // New sound effects for better experience
+        const pauseBuffer = createProceduralSound(0.2, (time) => {
+            return Math.sin(2 * Math.PI * 330 * time) * Math.exp(-time * 6) * 0.3;
+        });
+        if (pauseBuffer) soundBuffers.set('pause', pauseBuffer);
+
+        const gameOverBuffer = createProceduralSound(1.5, (time) => {
+            const melody = [523, 494, 440, 392, 330, 294]; // Descending notes
+            const noteIndex = Math.floor(time * 2) % melody.length;
+            const noteTime = (time * 2) % 1;
+            const freq = melody[noteIndex];
+            const envelope = Math.exp(-time * 1.5) * Math.min(noteTime * 10, 1) * (1 - noteTime);
+            return Math.sin(2 * Math.PI * freq * time) * envelope * 0.2;
+        });
+        if (gameOverBuffer) soundBuffers.set('gameover', gameOverBuffer);
 
         console.log('✅ Sound effects loaded');
     }
@@ -1247,19 +1799,30 @@
         const buffer = audioContext.createBuffer(1, length, sampleRate);
         const data = buffer.getChannelData(0);
 
-        // Simple melody pattern
-        const notes = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]; // C4 to C6 scale
+        // Enhanced melody pattern with chord progression
+        const chordProgression = [
+            [261.63, 329.63, 392.00], // C major
+            [293.66, 369.99, 440.00], // D major
+            [329.63, 415.30, 493.88], // E major
+            [349.23, 440.00, 523.25]  // F major
+        ];
 
         for (let i = 0; i < length; i++) {
             const time = i / sampleRate;
-            const beat = Math.floor(time * 2) % 8; // 2 beats per second, 8 note pattern
-            const frequency = notes[beat] || notes[0];
+            const measure = Math.floor(time * 0.5) % 4; // Change chord every 2 seconds
+            const chord = chordProgression[measure];
 
-            // Create a simple square wave with some harmonics
-            const wave = Math.sin(2 * Math.PI * frequency * time) > 0 ? 1 : -1;
-            const harmonic = Math.sin(2 * Math.PI * frequency * 2 * time) * 0.3;
+            // Create rich harmony
+            let wave = 0;
+            chord.forEach((freq, index) => {
+                const amplitude = [0.4, 0.3, 0.2][index]; // Different amplitudes for each note
+                wave += Math.sin(2 * Math.PI * freq * time) * amplitude;
+            });
 
-            data[i] = (wave + harmonic) * 0.1 * Math.exp(-time * 0.1); // Fade out over time
+            // Add some subtle variation
+            const variation = Math.sin(2 * Math.PI * 2 * time) * 0.1;
+
+            data[i] = (wave + variation) * 0.15 * Math.exp(-time * 0.05); // Slower fade
         }
 
         return buffer;
@@ -1275,7 +1838,12 @@
 
     // Main game start function with audio initialization
     function startGame() {
-        console.log('🎮 Starting game...');
+        // Check if user is authenticated for multiplayer features
+        if (!isAuthenticated && user) {
+            console.warn('⚠️ User not authenticated - playing in single-player mode');
+        }
+
+        console.log('🎮 Starting game...', isAuthenticated ? 'with multiplayer' : 'single-player');
         isGameStarted = true;
         isRunning = true;
         gameTime = 0;
@@ -1347,25 +1915,75 @@
         playSound('landing', 0.4);
     }
 
-    // Update collision check to play sound
-    function gameOver() {
+    function showGameOverScreen() {
+        isGameOver = true;
         isRunning = false;
-
-        // Play collision sound
-        playSound('collision', 0.8);
-
-        // Stop background music
-        stopBackgroundMusic();
+        isPaused = false;
 
         console.log(`💀 Game Over! Final Score: ${score}`);
 
-        // Show game over screen or restart option
+        // Play game over sound
         setTimeout(() => {
-            if (confirm(`Game Over! Score: ${score}. Play again?`)) {
-                resetGame();
-                startGame();
+            playSound('gameover', 0.6);
+        }, 200); // Delay for better timing
+    }
+
+    // Update collision check to play sound
+    function gameOver() {
+        showGameOverScreen();
+
+        // Stop background music
+        stopBackgroundMusic();
+    }
+
+    // Authentication handlers
+    async function handleLogin() {
+        try {
+            // Simple demo login - in real app this would open a login modal
+            const result = await authActions.login('demo@example.com', 'password123');
+            if (result.success) {
+                console.log('✅ User logged in successfully');
+            } else {
+                console.error('❌ Login failed:', result.error);
+                showError('Login failed: ' + result.error);
             }
-        }, 100);
+        } catch (error) {
+            console.error('❌ Login error:', error);
+            showError('Login error: ' + error.message);
+        }
+    }
+
+    function handleLogout() {
+        authActions.logout();
+        console.log('✅ User logged out');
+    }
+
+    async function connectToMultiplayer() {
+        if (!isAuthenticated || !user) {
+            console.warn('⚠️ Cannot connect to multiplayer: user not authenticated');
+            return;
+        }
+
+        try {
+            console.log('🌐 Connecting to multiplayer server...');
+
+            // Initialize multiplayer connection
+            await gameService.initializeGrpc();
+
+            // Join multiplayer game
+            const success = await gameService.joinGame('default_room', user.id);
+
+            if (success) {
+                console.log('✅ Connected to multiplayer successfully');
+                showError('Connected to multiplayer! Other players will appear when they join.');
+            } else {
+                console.error('❌ Failed to connect to multiplayer');
+                showError('Failed to connect to multiplayer server. Please try again.');
+            }
+        } catch (error) {
+            console.error('❌ Multiplayer connection error:', error);
+            showError('Multiplayer connection failed: ' + error.message);
+        }
     }
 
     // Update pickup collection to play sound
@@ -1423,38 +2041,144 @@
     }
 </script>
 
-<div class="endless-runner-container">
+    <div class="endless-runner-container">
     {#if !isGameStarted}
         <div class="start-screen">
             <div class="start-content">
                 <h1>🏃 Endless Runner 3D</h1>
                 <p>Press any key to start!</p>
+
+                <div class="auth-status">
+                    {#if user}
+                        <div class="authenticated">
+                            <p>✅ <strong>Logged in as:</strong> {user.username || user.email}</p>
+                            <p>🎮 <strong>Mode:</strong> Multiplayer Ready!</p>
+                            <button class="connect-multiplayer-btn" on:click={connectToMultiplayer}>
+                                🌐 Connect to Multiplayer
+                            </button>
+                        </div>
+                    {:else}
+                        <div class="not-authenticated">
+                            <p>⚠️ <strong>Guest Mode:</strong> Single-player only</p>
+                            <p>💡 <strong>Login for:</strong> Multiplayer, leaderboards, achievements</p>
+                            <button class="quick-login-btn" on:click={handleLogin}>
+                                🚀 Quick Login (Demo)
+                            </button>
+                        </div>
+                    {/if}
+                </div>
+
+                <div class="game-info">
+                    <p>✅ <strong>WebGL:</strong> Hardware accelerated 3D graphics</p>
+                    <p>✅ <strong>Audio:</strong> Procedural sound effects</p>
+                    <p>✅ <strong>Controls:</strong> Responsive keyboard input</p>
+                    <p>✅ <strong>Performance:</strong> Adaptive quality & 60 FPS</p>
+                </div>
+
                 <div class="controls-preview">
                     <div class="control-item">
-                        <span class="key">SPACE</span> Jump
+                        <span class="key">SPACE</span> Jump over obstacles
                     </div>
                     <div class="control-item">
-                        <span class="key">A/D</span> Change Lane
+                        <span class="key">A/D</span> Change lanes
                     </div>
                     <div class="control-item">
-                        <span class="key">S</span> Slide
+                        <span class="key">S</span> Slide under obstacles
                     </div>
+                    <div class="control-item">
+                        <span class="key">P</span> Pause game
+                    </div>
+                </div>
+
+                <div class="system-info">
+                    <p><strong>Browser:</strong> {getBrowserInfo()}</p>
+                    <p><strong>WebGL:</strong> {getWebGLInfo()}</p>
+                    <p><strong>Performance:</strong> {fps >= 50 ? 'Excellent' : fps >= 30 ? 'Good' : 'Needs optimization'}</p>
+                </div>
+            </div>
+        </div>
+    {/if}
+
+    {#if isPaused}
+        <div class="pause-overlay">
+            <div class="pause-content">
+                <h2>⏸️ Game Paused</h2>
+                <p>Press <span class="key">P</span> or <span class="key">ESC</span> to resume</p>
+                <button class="resume-btn" on:click={togglePause}>▶️ Resume Game</button>
+                <button class="menu-btn" on:click={resetGame}>🏠 Main Menu</button>
+            </div>
+        </div>
+    {/if}
+
+    {#if isGameOver}
+        <div class="game-over-overlay">
+            <div class="game-over-content">
+                <h2>💀 Game Over!</h2>
+                <div class="final-stats">
+                    <p class="final-score">Final Score: <span>{score.toLocaleString()}</span></p>
+                    <p class="final-distance">Distance: <span>{Math.floor(playerPosition.z)}m</span></p>
+                    <p class="final-speed">Max Speed: <span>{Math.max(1, speed).toFixed(1)}x</span></p>
+                </div>
+                <div class="game-over-actions">
+                    <button class="play-again-btn" on:click={() => { resetGame(); startGame(); }}>🔄 Play Again</button>
+                    <button class="menu-btn" on:click={resetGame}>🏠 Main Menu</button>
                 </div>
             </div>
         </div>
     {/if}
 
     <div class="game-header">
-        <div class="score">Score: {score.toLocaleString()}</div>
-        <div class="speed">Speed: {speed.toFixed(1)}x</div>
-        <div class="distance">Distance: {Math.floor(playerPosition.z)}m</div>
-        <div class="fps {fps >= 50 ? 'fps-high' : fps >= 30 ? 'fps-medium' : 'fps-low'}">FPS: {fps}</div>
-        <button class="audio-btn" on:click={toggleMusic} title="Toggle Background Music">
-            {isMusicPlaying ? '🔊' : '🔇'}
-        </button>
+        <div class="left-info">
+            {#if user}
+                <div class="user-info">
+                    <span class="user-avatar">👤</span>
+                    <span class="username">{user.username || user.email}</span>
+                    <button class="logout-btn" on:click={handleLogout} title="Logout">
+                        🚪
+                    </button>
+                </div>
+            {:else}
+                <div class="auth-info">
+                    <button class="login-btn" on:click={handleLogin} title="Login for multiplayer">
+                        🔐 Login
+                    </button>
+                </div>
+            {/if}
+        </div>
+
+        <div class="game-stats">
+            <div class="score">Score: {score.toLocaleString()}</div>
+            <div class="speed">Speed: {speed.toFixed(1)}x</div>
+            <div class="distance">Distance: {Math.floor(playerPosition.z)}m</div>
+            {#if multiplayerEnabled}
+                <div class="multiplayer-info">
+                    👥 {otherPlayers.length + 1} players
+                </div>
+            {/if}
+            <div class="fps {fps >= 50 ? 'fps-high' : fps >= 30 ? 'fps-medium' : 'fps-low'}">FPS: {fps}</div>
+        </div>
+
+        <div class="right-controls">
+            <button class="audio-btn" on:click={toggleMusic} title="Toggle Background Music">
+                {isMusicPlaying ? '🔊' : '🔇'}
+            </button>
+        </div>
     </div>
 
-    <div id="game3d-container" class="game3d-container"></div>
+    <div id="game3d-container" class="game3d-container">
+        <!-- Fallback content for when WebGL fails -->
+        <div class="webgl-fallback" style="display: none;">
+            <h3>⚠️ WebGL Initialization Issue</h3>
+            <p>Your browser may not support WebGL or there was an issue initializing the 3D graphics.</p>
+            <p>Please try:</p>
+            <ul>
+                <li>Updating your browser to the latest version</li>
+                <li>Updating your graphics drivers</li>
+                <li>Enabling hardware acceleration in browser settings</li>
+                <li>Trying a different browser</li>
+            </ul>
+        </div>
+    </div>
 
     <div class="controls">
         <div class="control-item">
@@ -1519,6 +2243,66 @@
         color: #cccccc;
     }
 
+    .auth-status {
+        margin: 2rem 0;
+        padding: 1.5rem;
+        border-radius: 12px;
+        text-align: center;
+    }
+
+    .authenticated {
+        background: rgba(74, 222, 128, 0.1);
+        border: 2px solid rgba(74, 222, 128, 0.3);
+    }
+
+    .not-authenticated {
+        background: rgba(251, 191, 36, 0.1);
+        border: 2px solid rgba(251, 191, 36, 0.3);
+    }
+
+    .auth-status p {
+        margin: 0.5rem 0;
+        font-size: 1rem;
+    }
+
+    .quick-login-btn {
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 25px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        margin-top: 1rem;
+    }
+
+    .quick-login-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+    }
+
+    .connect-multiplayer-btn {
+        background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 25px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        margin-top: 1rem;
+    }
+
+    .connect-multiplayer-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+    }
+
     .game-header {
         display: flex;
         justify-content: space-between;
@@ -1530,11 +2314,103 @@
         border-bottom: 1px solid rgba(74, 158, 255, 0.3);
     }
 
+    .left-info {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .user-info {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: rgba(74, 158, 255, 0.1);
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        border: 1px solid rgba(74, 158, 255, 0.3);
+    }
+
+    .user-avatar {
+        font-size: 1.2rem;
+    }
+
+    .username {
+        color: #4a9eff;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+
+    .logout-btn {
+        background: rgba(255, 107, 107, 0.2);
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        color: #ff6b6b;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .logout-btn:hover {
+        background: rgba(255, 107, 107, 0.3);
+        transform: scale(1.1);
+    }
+
+    .auth-info {
+        display: flex;
+        align-items: center;
+    }
+
+    .login-btn {
+        background: linear-gradient(135deg, #4a9eff, #3a8eef);
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+    }
+
+    .login-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+    }
+
+    .game-stats {
+        display: flex;
+        gap: 2rem;
+        align-items: center;
+    }
+
+    .right-controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
     .score, .speed, .distance {
         font-size: 1.2rem;
         font-weight: bold;
         color: #4ade80;
         text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
+    }
+
+    .multiplayer-info {
+        font-size: 1.1rem;
+        font-weight: bold;
+        color: #fbbf24;
+        text-shadow: 0 0 8px rgba(251, 191, 36, 0.5);
+        background: rgba(251, 191, 36, 0.1);
+        padding: 0.3rem 0.8rem;
+        border-radius: 15px;
+        border: 1px solid rgba(251, 191, 36, 0.3);
     }
 
     .audio-btn {
@@ -1615,6 +2491,23 @@
         box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
     }
 
+    .game-info {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin: 2rem 0;
+        backdrop-filter: blur(10px);
+    }
+
+    .game-info p {
+        margin: 0.5rem 0;
+        font-size: 0.9rem;
+        color: #4ade80;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
     .controls-preview {
         display: flex;
         gap: 1rem;
@@ -1624,6 +2517,150 @@
 
     .controls-preview .control-item {
         background: rgba(74, 158, 255, 0.2);
+    }
+
+    .system-info {
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1.5rem;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .system-info p {
+        margin: 0.3rem 0;
+        font-size: 0.8rem;
+        color: #cccccc;
+    }
+
+    /* Pause Overlay */
+    .pause-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 2000;
+        backdrop-filter: blur(5px);
+    }
+
+    .pause-content {
+        text-align: center;
+        padding: 3rem;
+        border-radius: 15px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 2px solid rgba(74, 158, 255, 0.3);
+        backdrop-filter: blur(10px);
+    }
+
+    .pause-content h2 {
+        font-size: 2.5rem;
+        margin-bottom: 1rem;
+        color: #4a9eff;
+        text-shadow: 0 0 20px rgba(74, 158, 255, 0.5);
+    }
+
+    .pause-content p {
+        font-size: 1.2rem;
+        margin-bottom: 2rem;
+        color: #cccccc;
+    }
+
+    /* Game Over Overlay */
+    .game-over-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 2000;
+        backdrop-filter: blur(5px);
+    }
+
+    .game-over-content {
+        text-align: center;
+        padding: 3rem;
+        border-radius: 15px;
+        background: rgba(244, 67, 54, 0.1);
+        border: 2px solid rgba(244, 67, 54, 0.3);
+        backdrop-filter: blur(10px);
+        max-width: 500px;
+    }
+
+    .game-over-content h2 {
+        font-size: 2.5rem;
+        margin-bottom: 2rem;
+        color: #ff6b6b;
+        text-shadow: 0 0 20px rgba(255, 107, 107, 0.5);
+    }
+
+    .final-stats {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+    }
+
+    .final-score, .final-distance, .final-speed {
+        font-size: 1.3rem;
+        margin: 1rem 0;
+        color: #ffffff;
+    }
+
+    .final-score span, .final-distance span, .final-speed span {
+        color: #4ade80;
+        font-weight: bold;
+        font-size: 1.5rem;
+    }
+
+    .game-over-actions {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+    }
+
+    .play-again-btn, .resume-btn {
+        background: linear-gradient(135deg, #4a9eff, #3a8eef);
+        color: white;
+        border: none;
+        padding: 1rem 2rem;
+        border-radius: 8px;
+        font-size: 1.1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(74, 158, 255, 0.3);
+    }
+
+    .play-again-btn:hover, .resume-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(74, 158, 255, 0.4);
+    }
+
+    .menu-btn {
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        padding: 1rem 2rem;
+        border-radius: 8px;
+        font-size: 1.1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        backdrop-filter: blur(10px);
+    }
+
+    .menu-btn:hover {
+        background: rgba(255, 255, 255, 0.2);
+        border-color: rgba(255, 255, 255, 0.5);
     }
 
     /* Hide scrollbar for cleaner look */

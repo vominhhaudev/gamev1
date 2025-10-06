@@ -9,12 +9,12 @@ echo =================================
 echo.
 
 echo 📋 Starting initialization...
-powershell -ExecutionPolicy Bypass -File "%~dp0start-game-fixed.ps1" %*
+powershell -ExecutionPolicy Bypass -File "%~dp0start-project-complete.ps1" %*
 
 if errorlevel 1 (
     echo.
     echo ❌ Startup failed. Check the error messages above.
-    echo 🔧 Try running: powershell -ExecutionPolicy Bypass -File "start-game-fixed.ps1" -Verbose
+    echo 🔧 Try running: powershell -ExecutionPolicy Bypass -File "start-project-complete.ps1" -Verbose
     pause
     exit /b 1
 )

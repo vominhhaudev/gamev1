@@ -28,89 +28,62 @@ function Start-AllServices {
 
     # 2. Start PocketBase (Database)
     Write-Host "Starting PocketBase (port 8090)..." -ForegroundColor Cyan
-    try {
-        $pocketbasePath = Join-Path $PSScriptRoot "pocketbase\pocketbase.exe"
-        if (Test-Path $pocketbasePath) {
-            Start-Process $pocketbasePath -ArgumentList "serve", "--http=127.0.0.1:8090" -WindowStyle Hidden
-            Start-Sleep -Seconds 3
-            Write-Host "  ✅ PocketBase ready" -ForegroundColor Green
-        } else {
-            Write-Host "  ❌ PocketBase binary not found at $pocketbasePath" -ForegroundColor Red
-            Write-Host "  💡 Run: pwsh -File scripts\setup-pocketbase.ps1" -ForegroundColor Yellow
-        }
-    }
-    catch {
-        Write-Host "  ❌ Error starting PocketBase: $($_.Exception.Message)" -ForegroundColor Red
+    $pocketbasePath = Join-Path $PSScriptRoot "pocketbase\pocketbase.exe"
+    if (Test-Path $pocketbasePath) {
+        Start-Process $pocketbasePath -ArgumentList "serve", "--http=127.0.0.1:8090" -WindowStyle Hidden
+        Start-Sleep -Seconds 3
+        Write-Host "  ✅ PocketBase ready" -ForegroundColor Green
+    } else {
+        Write-Host "  ❌ PocketBase binary not found at $pocketbasePath" -ForegroundColor Red
+        Write-Host "  💡 Run: pwsh -File scripts\setup-pocketbase.ps1" -ForegroundColor Yellow
     }
 
     # 3. Start Worker (Game Logic)
     Write-Host "Starting Worker (gRPC 50051)..." -ForegroundColor Cyan
-    try {
-        $workerPath = Join-Path $PSScriptRoot "worker"
-        Set-Location $workerPath
-        Start-Process "cargo" -ArgumentList "run" -WindowStyle Hidden
-        Start-Sleep -Seconds 5
-        Write-Host "  ✅ Worker ready" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "  ❌ Error starting Worker: $($_.Exception.Message)" -ForegroundColor Red
-    }
+    $workerPath = Join-Path $PSScriptRoot "worker"
+    Set-Location $workerPath
+    Start-Process "cargo" -ArgumentList "run" -WindowStyle Hidden
+    Start-Sleep -Seconds 5
+    Write-Host "  ✅ Worker ready" -ForegroundColor Green
 
     # 4. Start Gateway (HTTP API)
     Write-Host "🌐 Starting Gateway (port 8080)..." -ForegroundColor Cyan
-    try {
-        $gatewayPath = Join-Path $PSScriptRoot "gateway"
-        Set-Location $gatewayPath
-        Start-Process "cargo" -ArgumentList "run" -WindowStyle Hidden
-        Start-Sleep -Seconds 5
-        Write-Host "  ✅ Gateway ready" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "  ❌ Error starting Gateway: $($_.Exception.Message)" -ForegroundColor Red
-    }
+    $gatewayPath = Join-Path $PSScriptRoot "gateway"
+    Set-Location $gatewayPath
+    Start-Process "cargo" -ArgumentList "run" -WindowStyle Hidden
+    Start-Sleep -Seconds 5
+    Write-Host "  ✅ Gateway ready" -ForegroundColor Green
 
     # 5. Start Client (Web UI)
     Write-Host "Starting Client (port 5173)..." -ForegroundColor Cyan
-    try {
-        $clientPath = Join-Path $PSScriptRoot "client"
+    $clientPath = Join-Path $PSScriptRoot "client"
 
-        # Check if client directory exists
-        if (!(Test-Path $clientPath)) {
-            Write-Host "  ❌ Client directory not found at $clientPath" -ForegroundColor Red
-            Write-Host "  💡 Make sure you're running this script from the gamev1 root directory" -ForegroundColor Yellow
-            Write-Host "  📁 Expected structure: gamev1/client/, gamev1/worker/, gamev1/gateway/" -ForegroundColor Yellow
-        } else {
-            Set-Location $clientPath
+    # Check if client directory exists
+    if (!(Test-Path $clientPath)) {
+        Write-Host "  ❌ Client directory not found at $clientPath" -ForegroundColor Red
+        Write-Host "  💡 Make sure you're running this script from the gamev1 root directory" -ForegroundColor Yellow
+        Write-Host "  📁 Expected structure: gamev1/client/, gamev1/worker/, gamev1/gateway/" -ForegroundColor Yellow
+    } else {
+        Set-Location $clientPath
 
-            # Check if node_modules exists, install if not
-            if (!(Test-Path "node_modules")) {
-                Write-Host "  Installing dependencies..." -ForegroundColor Yellow
-                try {
-                    & npm install
-                }
-                catch {
-                    Write-Host "  npm install failed, trying with legacy peer deps..." -ForegroundColor Yellow
-                    & npm install --legacy-peer-deps
-                }
-            }
-
-            # Try to start with batch file first (more reliable)
-            $batchFile = Join-Path $clientPath "start-client.bat"
-            if (Test-Path $batchFile) {
-                Write-Host "  Using start-client.bat for better reliability..." -ForegroundColor Cyan
-                Start-Process $batchFile -WindowStyle Hidden
-            } else {
-                Write-Host "  Using npm run dev..." -ForegroundColor Cyan
-                Start-Process "npm" -ArgumentList "run", "dev" -WindowStyle Hidden
-            }
-
-            Start-Sleep -Seconds 8  # Give more time for Client to start
-            Write-Host "  Client ready at http://localhost:5173" -ForegroundColor Green
+        # Check if node_modules exists, install if not
+        if (!(Test-Path "node_modules")) {
+            Write-Host "  Installing dependencies..." -ForegroundColor Yellow
+            & npm install
         }
-    }
-    catch {
-        Write-Host "  Error starting Client: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "  Try manually: cd client && .\start-client.bat" -ForegroundColor Yellow
+
+        # Try to start with batch file first (more reliable)
+        $batchFile = Join-Path $clientPath "start-client.bat"
+        if (Test-Path $batchFile) {
+            Write-Host "  Using start-client.bat for better reliability..." -ForegroundColor Cyan
+            Start-Process $batchFile -WindowStyle Hidden
+        } else {
+            Write-Host "  Using npm run dev..." -ForegroundColor Cyan
+            Start-Process "npm" -ArgumentList "run", "dev" -WindowStyle Hidden
+        }
+
+        Start-Sleep -Seconds 8  # Give more time for Client to start
+        Write-Host "  Client ready at http://localhost:5173" -ForegroundColor Green
     }
 
     # Back to root directory
@@ -193,12 +166,12 @@ function Show-Help {
     Write-Host "  Terminal 1: pwsh -File scripts/run-service.ps1 pocketbase" -ForegroundColor Cyan
     Write-Host "  Terminal 2: pwsh -File scripts/run-service.ps1 worker" -ForegroundColor Cyan
     Write-Host "  Terminal 3: pwsh -File scripts/run-service.ps1 gateway" -ForegroundColor Cyan
-    Write-Host "  Terminal 4: cd client && .\start-client.bat" -ForegroundColor Cyan
+    Write-Host "  Terminal 4: cd client; .\start-client.bat" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "🔧 ALTERNATIVE STARTUP (if script fails):" -ForegroundColor Yellow
     Write-Host "  1. pwsh -File scripts/run-service.ps1 worker" -ForegroundColor Cyan
     Write-Host "  2. pwsh -File scripts/run-service.ps1 gateway" -ForegroundColor Cyan
-    Write-Host "  3. cd client && npm run dev" -ForegroundColor Cyan
+    Write-Host "  3. cd client; npm run dev" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "🔍 ACCESS POINTS:" -ForegroundColor Yellow
     Write-Host "  Client:     http://localhost:5173" -ForegroundColor White
@@ -210,7 +183,7 @@ function Show-Help {
     Write-Host "  2. Open new terminal in project root" -ForegroundColor Cyan
     Write-Host "  3. Run: .\restart-all-services-simple.ps1" -ForegroundColor Cyan
     Write-Host "  4. If Node.js errors: Run 'npm install' in client folder" -ForegroundColor Cyan
-    Write-Host "  5. If Client doesn't start: Try cd client && .\start-client.bat" -ForegroundColor Cyan
+    Write-Host "  5. If Client doesn't start: Try cd client; .\start-client.bat" -ForegroundColor Cyan
     Write-Host "  6. If port 5173 busy: Client auto-switches to 5174" -ForegroundColor Cyan
     Write-Host "  7. If Rust errors: Run 'cargo build' in each service folder" -ForegroundColor Cyan
     Write-Host "  8. If proto file not found: Make sure you're in the correct directory" -ForegroundColor Cyan
@@ -237,4 +210,5 @@ elseif ($Status) {
 }
 else {
     Start-AllServices
+}
 }

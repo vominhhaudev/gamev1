@@ -7,7 +7,7 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 #[cfg(feature = "compression")]
 use zstd::{Decoder, Encoder};
 #[cfg(feature = "compression")]
-use snap::{raw::{Decoder as SnapDecoder, Encoder as SnapEncoder}, read::FrameDecoder};
+use snap::raw::{Decoder as SnapDecoder, Encoder as SnapEncoder};
 
 /// Compression algorithms available
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(compressed.compressed_size, data.len());
 
         let decompressed = Compression::decompress(&compressed).unwrap();
-        assert_eq!(decompressed, data);
+        assert_eq!(decompressed.as_slice(), data);
     }
 
     #[cfg(feature = "compression")]
@@ -240,12 +240,12 @@ mod tests {
             threshold: 0, // Force compression even for small data
         };
 
-        let compressed = Compression::compress(data, &config);
+        let compressed = Compression::compress(&data, &config);
         assert_eq!(compressed.algorithm, CompressionAlgorithm::Lz4);
         assert!(compressed.is_effective());
 
         let decompressed = Compression::decompress(&compressed).unwrap();
-        assert_eq!(decompressed, data);
+        assert_eq!(decompressed, data.as_slice());
     }
 
     #[cfg(feature = "compression")]
@@ -258,10 +258,10 @@ mod tests {
             threshold: 0,
         };
 
-        let compressed = Compression::compress(data, &config);
+        let compressed = Compression::compress(&data, &config);
         assert_eq!(compressed.algorithm, CompressionAlgorithm::Zstd);
 
         let decompressed = Compression::decompress(&compressed).unwrap();
-        assert_eq!(decompressed, data);
+        assert_eq!(decompressed, data.as_slice());
     }
 }

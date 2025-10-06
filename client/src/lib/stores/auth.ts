@@ -67,7 +67,7 @@ export const authActions = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ username: email, password }),
       });
 
       if (!response.ok) {
@@ -85,8 +85,8 @@ export const authActions = {
       };
 
       const user: User = {
-        id: data.user_id,
-        email: data.email,
+        id: data.user.id,
+        email: data.user.email,
       };
 
       // Lưu vào localStorage (chỉ trong browser)

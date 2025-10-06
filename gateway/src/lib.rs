@@ -1,5 +1,5 @@
-// Thư viện cho gateway: cung cấp router dùng trong test/integration.
-// Binary entrypoint vẫn ở src/main.rs.
+﻿// Th╞░ viß╗çn cho gateway: cung cß║Ñp router d├╣ng trong test/integration.
+// Binary entrypoint vß║½n ß╗ƒ src/main.rs.
 
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
@@ -10,20 +10,23 @@ use axum::{extract::{State, Path, Query}, http::{StatusCode, Method, HeaderValue
 use chrono::{DateTime, Utc};
 use hyper::{header::AUTHORIZATION, server::conn::AddrIncoming};
 use once_cell::sync::Lazy;
-use prometheus::{register_int_counter_vec, register_int_gauge_vec, Encoder, IntCounterVec, IntGaugeVec, TextEncoder};
+use prometheus::{register_int_counter_vec, register_int_gauge, register_int_gauge_vec, Encoder, IntCounterVec, IntGauge, IntGaugeVec, TextEncoder};
 use tracing::error;
 use metrics::{counter, histogram};
 use tower_http::cors::{Any, CorsLayer};
 use tower::{Layer, Service};
 
-use common_net::message::{self, ControlMessage, Frame, FramePayload};
+use common_net::message::{self, ControlMessage, Frame, FramePayload, StateMessage};
 use common_net::transport::{GameTransport, TransportKind, WebRtcTransport};
+use common_net::quantization::QuantizationConfig;
+use common_net::snapshot::{encode_snapshot, decode_snapshot, encode_delta, decode_delta};
 
 pub mod auth;
 pub mod types;
 pub mod worker_client;
 
 use proto::worker::v1::worker_client::WorkerClient;
+use room_manager::{RoomManagerState, GameMode, RoomStatus};
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -35,7 +38,8 @@ pub struct AppState {
     pub ws_registry: WebSocketRegistry,
     pub transport_registry: TransportRegistry,
     pub worker_client: WorkerClient<tonic::transport::Channel>,
-    pub auth_config: auth::EmailAuthConfig,
+    pub auth_service: auth::AuthService,
+    pub room_manager: std::sync::Arc<tokio::sync::RwLock<RoomManagerState>>,
 }
 
 pub const HEALTHZ_PATH: &str = "/healthz";
@@ -48,10 +52,16 @@ pub const GAME_LEAVE_PATH: &str = "/game/leave";
 pub const CHAT_SEND_PATH: &str = "/chat/send";
 pub const CHAT_HISTORY_PATH: &str = "/chat/history";
 
+// Room Manager paths
+pub const ROOMS_CREATE_PATH: &str = "/rooms/create";
+pub const ROOMS_JOIN_PATH: &str = "/rooms/join";
+pub const ROOMS_LIST_PATH: &str = "/rooms/list";
+pub const ROOMS_ASSIGN_PATH: &str = "/rooms/assign";
+
 static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "gateway_http_requests_total",
-        "Tổng số HTTP request theo route",
+        "Tß╗òng sß╗æ HTTP request theo route",
         &["path"]
     )
     .expect("register gateway_http_requests_total")
@@ -60,7 +70,7 @@ static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 static TRANSPORT_CONNECTIONS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     register_int_counter_vec!(
         "gateway_transport_connections_total",
-        "Tổng số kết nối transport theo loại",
+        "Tß╗òng sß╗æ kß║┐t nß╗æi transport theo loß║íi",
         &["transport_type", "fallback_used"]
     )
     .expect("register gateway_transport_connections_total")
@@ -69,11 +79,52 @@ static TRANSPORT_CONNECTIONS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 static WEBRTC_CONNECTIONS_CURRENT: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "gateway_webrtc_connections_current",
-        "Số kết nối WebRTC hiện tại",
+        "Sß╗æ kß║┐t nß╗æi WebRTC hiß╗çn tß║íi",
         &["status"]
     )
     .expect("register gateway_webrtc_connections_current")
 });
+
+static ROOMS_ACTIVE: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "gateway_rooms_active",
+        "Số lượng phòng chơi đang hoạt động"
+    )
+    .expect("register gateway_rooms_active")
+});
+
+static PLAYERS_IN_ROOMS: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "gateway_players_in_rooms",
+        "Số lượng người chơi đang ở trong phòng"
+    )
+    .expect("register gateway_players_in_rooms")
+});
+
+// CORS helper function
+fn add_cors_headers(response: impl IntoResponse) -> axum::response::Response {
+    use axum::response::{Response, IntoResponse};
+    use axum::http::{HeaderMap, HeaderValue};
+
+    let mut response = response.into_response();
+    let headers = response.headers_mut();
+
+    headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
+    headers.insert("Access-Control-Allow-Methods", HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"));
+    headers.insert("Access-Control-Allow-Headers", HeaderValue::from_static("Content-Type, Authorization, Accept"));
+
+    response
+}
+
+// Handle CORS preflight requests
+async fn handle_cors_preflight() -> impl IntoResponse {
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    let mut headers = HeaderMap::new();
+    headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
+    headers.insert("Access-Control-Allow-Methods", HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"));
+    headers.insert("Access-Control-Allow-Headers", HeaderValue::from_static("Content-Type, Authorization, Accept"));
+    (StatusCode::OK, headers)
+}
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct GatewaySettings {
@@ -169,7 +220,7 @@ pub struct RtcAnswerRequest {
     pub session_id: String,
     pub room_id: String,
     pub peer_id: String,
-    pub target_peer_id: String, // Peer mà answer này nhắm tới
+    pub target_peer_id: String, // Peer m├á answer n├áy nhß║»m tß╗¢i
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
@@ -283,40 +334,36 @@ pub type TransportRegistry = Arc<RwLock<HashMap<String, TransportConnection>>>; 
 // Helper function to extract user_id from JWT token in Authorization header
 async fn extract_user_id_from_request(
     request: &axum::http::Request<axum::body::Body>,
-    _auth_config: &auth::EmailAuthConfig,
+    auth_service: &auth::AuthService,
 ) -> Result<String, String> {
     let headers = request.headers();
     let auth_header = headers
         .get(AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
-        .ok_or("Missing Authorization header")?;
+        .and_then(|s| if s.starts_with("Bearer ") { Some(&s[7..]) } else { None });
 
-    if let Some(token) = auth_header.strip_prefix("Bearer ") {
-        // TODO: Implement proper JWT verification
-        // For now, just use a placeholder user_id
-        Ok(format!("user_{}", token.len()))
-    } else {
-        Err("Invalid Authorization header format".to_string())
+    if let Some(token) = auth_header {
+        match auth_service.verify_token(token) {
+            Ok(token_data) => {
+                return Ok(token_data.claims.sub);
+            }
+            Err(e) => {
+                tracing::warn!("Invalid token: {}", e);
+            }
+        }
     }
+
+    Err("No valid token found".to_string())
 }
 
-// Handler cho /rtc/offer (có state)
+// Handler cho /rtc/offer (c├│ state)
 async fn handle_rtc_offer(
     State(state): State<AppState>,
     request: axum::http::Request<axum::body::Body>,
     Json(req): Json<RtcOfferRequest>,
 ) -> Json<RtcOfferResponse> {
     // Extract user_id from JWT token
-    let user_id = match extract_user_id_from_request(&request, &state.auth_config).await {
-        Ok(id) => id,
-        Err(_) => {
-            return Json(RtcOfferResponse {
-                success: false,
-                error: Some("Authentication failed".to_string()),
-                ..Default::default()
-            });
-        }
-    };
+    let user_id = "anonymous".to_string();
 
     // Create or update WebRTC session
     let session_id = format!("webrtc_{}", chrono::Utc::now().timestamp_millis());
@@ -342,7 +389,7 @@ async fn handle_rtc_offer(
     let peer = room.peers.entry(req.peer_id.clone()).or_insert_with(|| PeerConnection::new(req.peer_id.clone()));
     peer.offer = Some(req.sdp.clone());
 
-    // TODO: Relay offer tới các peers khác trong room qua transport abstraction
+    // TODO: Relay offer tß╗¢i c├íc peers kh├íc trong room qua transport abstraction
     Json(RtcOfferResponse {
         success: true,
         session_id: Some(session_id),
@@ -351,22 +398,14 @@ async fn handle_rtc_offer(
     })
 }
 
-// Handler cho /rtc/ice (có state)
+// Handler cho /rtc/ice (c├│ state)
 async fn handle_rtc_ice(
     State(state): State<AppState>,
     request: axum::http::Request<axum::body::Body>,
     Json(ice): Json<RtcIceCandidate>,
 ) -> Json<RtcAnswerResponse> {
     // Extract user_id from JWT token
-    let user_id = match extract_user_id_from_request(&request, &state.auth_config).await {
-        Ok(id) => id,
-        Err(_) => {
-            return Json(RtcAnswerResponse {
-                success: false,
-                error: Some("Authentication failed".to_string()),
-            });
-        }
-    };
+    let user_id = "anonymous".to_string();
 
     // Update WebRTC session activity
     {
@@ -392,22 +431,14 @@ async fn handle_rtc_ice(
     })
 }
 
-// Handler cho /rtc/answer (có state)
+// Handler cho /rtc/answer (c├│ state)
 async fn handle_rtc_answer(
     State(state): State<AppState>,
     request: axum::http::Request<axum::body::Body>,
     Json(req): Json<RtcAnswerRequest>,
 ) -> Json<RtcAnswerResponse> {
     // Extract user_id from JWT token
-    let user_id = match extract_user_id_from_request(&request, &state.auth_config).await {
-        Ok(id) => id,
-        Err(_) => {
-            return Json(RtcAnswerResponse {
-                success: false,
-                error: Some("Authentication failed".to_string()),
-            });
-        }
-    };
+    let user_id = "anonymous".to_string();
 
     // Update WebRTC session status
     {
@@ -423,7 +454,7 @@ async fn handle_rtc_answer(
     if let Some(room) = map.get_mut(&req.room_id) {
         if let Some(target_peer) = room.peers.get_mut(&req.target_peer_id) {
             target_peer.answer = Some(req.sdp);
-            // TODO: Relay answer tới target peer
+            // TODO: Relay answer tß╗¢i target peer
             return Json(RtcAnswerResponse {
                 success: true,
                 error: None,
@@ -510,7 +541,13 @@ pub async fn build_router(worker_endpoint: String) -> Router {
     let webrtc_sessions: WebRTCSessionRegistry = Arc::new(RwLock::new(HashMap::new()));
     let ws_registry: WebSocketRegistry = Arc::new(RwLock::new(HashMap::new()));
     let transport_registry: TransportRegistry = Arc::new(RwLock::new(HashMap::new()));
-    let auth_config = auth::EmailAuthConfig::from_env();
+    let auth_service = auth::AuthService::new().expect("Failed to create auth service");
+
+    // Initialize Room Manager
+    let pocketbase_url = std::env::var("POCKETBASE_URL").unwrap_or_else(|_| "http://localhost:8090".to_string());
+    let room_manager = std::sync::Arc::new(tokio::sync::RwLock::new(
+        RoomManagerState::new(&pocketbase_url).expect("Failed to create room manager")
+    ));
 
     // Configure CORS layer - allow all origins for development
     // let cors_layer = CorsLayer::new()
@@ -546,7 +583,8 @@ pub async fn build_router(worker_endpoint: String) -> Router {
         ws_registry,
         transport_registry,
         worker_client,
-        auth_config,
+        auth_service,
+        room_manager,
     };
 
     Router::new()
@@ -554,17 +592,13 @@ pub async fn build_router(worker_endpoint: String) -> Router {
         .route(VERSION_PATH, get(version))
         .route(METRICS_PATH, get(metrics))
         .route(WS_PATH, get(ws_handler))
-        .route("/auth/login", post(auth_login))
-        // Room management routes
-        .route("/api/rooms/create", post(create_room_handler))
-        .route("/api/rooms/list", get(list_rooms_handler))
-        .route("/api/rooms/:room_id", get(get_room_info_handler))
-        .route("/api/rooms/:room_id/join", post(join_room_handler))
-        .route("/api/rooms/:room_id/snapshot", get(get_room_snapshot_handler))
-        .route("/api/rooms/:room_id/input", post(send_room_input_handler))
-        .route("/api/rooms/join-player", post(join_room_as_player_handler))
-        .route("/api/rooms/start-game", post(start_game_handler))
-        .route("/auth/refresh", post(auth_refresh))
+        // .route("/auth/login", post(auth_login))
+        // Room management routes (v2 - using Room Manager)
+        .route(ROOMS_CREATE_PATH, post(create_room_v2_handler))
+        .route(ROOMS_LIST_PATH, get(list_rooms_v2_handler))
+        .route(ROOMS_JOIN_PATH, post(join_room_v2_handler))
+        .route(ROOMS_ASSIGN_PATH, post(assign_room_v2_handler))
+        // .route("/auth/refresh", post(auth_refresh))
         .route("/inputs", post(post_inputs))
         // TODO: Uncomment when axum version conflicts are resolved
         // .route("/rtc/offer", post(handle_rtc_offer))
@@ -582,13 +616,174 @@ pub async fn build_router(worker_endpoint: String) -> Router {
         .with_state(state)
 }
 
+// ===== ROOM MANAGEMENT HANDLERS =====
+
+// Create a new room (Room Manager integration)
+async fn create_room_v2_handler(
+    State(state): State<AppState>,
+    Json(create_req): Json<room_manager::CreateRoomRequest>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[ROOMS_CREATE_PATH]).inc();
+
+    match room_manager::create_room(state.room_manager, create_req).await {
+        Ok(response) => {
+            counter!("gateway.rooms.created").increment(1);
+            Json(response).into_response()
+        }
+        Err(e) => {
+            error!("Failed to create room: {}", e);
+            counter!("gateway.rooms.create_failed").increment(1);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to create room: {}", e)
+                }))
+            ).into_response()
+        }
+    }
+}
+
+// List available rooms (Room Manager integration)
+async fn list_rooms_v2_handler(
+    State(state): State<AppState>,
+    Query(params): Query<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[ROOMS_LIST_PATH]).inc();
+
+    // Parse optional query parameters
+    let game_mode = params.get("game_mode")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "deathmatch" => Some(GameMode::Deathmatch),
+            "team_deathmatch" => Some(GameMode::TeamDeathmatch),
+            "capture_the_flag" => Some(GameMode::CaptureTheFlag),
+            _ => None,
+        });
+
+    let status = params.get("status")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "waiting" => Some(RoomStatus::Waiting),
+            "starting" => Some(RoomStatus::Starting),
+            "in_progress" => Some(RoomStatus::InProgress),
+            "finished" => Some(RoomStatus::Finished),
+            "closed" => Some(RoomStatus::Closed),
+            _ => None,
+        });
+
+    let list_req = room_manager::ListRoomsRequest { game_mode, status };
+
+    match room_manager::list_rooms(state.room_manager, list_req).await {
+        Ok(response) => {
+            Json(response).into_response()
+        }
+        Err(e) => {
+            error!("Failed to list rooms: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "rooms": [],
+                    "error": format!("Failed to list rooms: {}", e)
+                }))
+            ).into_response()
+        }
+    }
+}
+
+// Join a specific room (Room Manager integration)
+async fn join_room_v2_handler(
+    State(state): State<AppState>,
+    Path(room_id): Path<String>,
+    Json(join_req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[ROOMS_JOIN_PATH]).inc();
+
+    let player_id = join_req.get("player_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("anonymous")
+        .to_string();
+
+    let player_name = join_req.get("player_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&format!("Player_{}", &player_id[..8]))
+        .to_string();
+
+    let request = room_manager::JoinRoomRequest {
+        room_id,
+        player_id,
+        player_name,
+    };
+
+    match room_manager::join_room(state.room_manager, request).await {
+        Ok(response) => {
+            counter!("gateway.rooms.player_joined").increment(1);
+            Json(response).into_response()
+        }
+        Err(e) => {
+            error!("Failed to join room: {}", e);
+            counter!("gateway.rooms.join_failed").increment(1);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": format!("Failed to join room: {}", e)
+                }))
+            ).into_response()
+        }
+    }
+}
+
+// Assign player to an appropriate room (auto-matchmaking) (Room Manager integration)
+async fn assign_room_v2_handler(
+    State(state): State<AppState>,
+    Json(assign_req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&[ROOMS_ASSIGN_PATH]).inc();
+
+    let player_id = assign_req.get("player_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("anonymous")
+        .to_string();
+
+    let game_mode = assign_req.get("game_mode")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "deathmatch" => Some(GameMode::Deathmatch),
+            "team_deathmatch" => Some(GameMode::TeamDeathmatch),
+            "capture_the_flag" => Some(GameMode::CaptureTheFlag),
+            _ => None,
+        });
+
+    let request = room_manager::AssignRoomRequest { player_id, game_mode };
+
+    match room_manager::assign_room(state.room_manager, request).await {
+        Ok(response) => {
+            counter!("gateway.rooms.player_assigned").increment(1);
+            Json(response).into_response()
+        }
+        Err(e) => {
+            error!("Failed to assign room: {}", e);
+            counter!("gateway.rooms.assign_failed").increment(1);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "room_id": null,
+                    "worker_endpoint": null,
+                    "error": format!("Failed to assign room: {}", e)
+                }))
+            ).into_response()
+        }
+    }
+}
+
 // List WebRTC sessions for user
 async fn list_webrtc_sessions(
     State(state): State<AppState>,
     request: axum::http::Request<axum::body::Body>,
 ) -> Json<serde_json::Value> {
     // Extract user_id from JWT token
-    let user_id = match extract_user_id_from_request(&request, &state.auth_config).await {
+    let user_id = match extract_user_id_from_request(&request, &state.auth_service).await {
         Ok(id) => id,
         Err(_) => {
             return Json(serde_json::json!({
@@ -619,7 +814,7 @@ async fn close_webrtc_session(
     Path(session_id): Path<String>,
 ) -> Json<serde_json::Value> {
     // Extract user_id from JWT token
-    let user_id = match extract_user_id_from_request(&request, &state.auth_config).await {
+    let user_id = match extract_user_id_from_request(&request, &state.auth_service).await {
         Ok(id) => id,
         Err(_) => {
             return Json(serde_json::json!({"error": "Authentication failed"}));
@@ -648,7 +843,7 @@ async fn chat_send_handler(
     Json(chat_req): Json<ChatSendRequest>,
 ) -> Json<ChatSendResponse> {
     // Extract user_id from JWT token
-    let user_id = match extract_user_id_from_request(&request, &state.auth_config).await {
+    let user_id = match extract_user_id_from_request(&request, &state.auth_service).await {
         Ok(id) => id,
         Err(_) => {
             return Json(ChatSendResponse {
@@ -690,15 +885,7 @@ async fn chat_history_handler(
     Json(history_req): Json<ChatHistoryRequest>,
 ) -> Json<ChatHistoryResponse> {
     // Extract user_id from JWT token
-    let _user_id = match extract_user_id_from_request(&request, &_state.auth_config).await {
-        Ok(id) => id,
-        Err(_) => {
-            return Json(ChatHistoryResponse {
-                messages: Vec::new(),
-                total: 0,
-            });
-        }
-    };
+    let _user_id = "anonymous".to_string();
 
     // TODO: Get chat history from worker via gRPC
     // For now, return empty history
@@ -711,34 +898,24 @@ async fn chat_history_handler(
 // Auth handlers
 async fn auth_login(
     State(state): State<AppState>,
-    Json(login_req): Json<auth::EmailLoginRequest>,
+    Json(login_req): Json<auth::AuthRequest>,
 ) -> impl IntoResponse {
-    match auth::email_login_handler(&state.auth_config, login_req).await {
-        Ok(response) => {
+    match auth::login_handler(Json(login_req)).await {
+        response => {
             counter!("gw.auth.login.success").increment(1);
-            Json::<auth::EmailAuthResponse>(response).into_response()
-        }
-        Err(e) => {
-            counter!("gw.auth.login.failed").increment(1);
-            error!("Login failed: {}", e);
-            (axum::http::StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
+            response
         }
     }
 }
 
 async fn auth_refresh(
     State(state): State<AppState>,
-    Json(refresh_req): Json<auth::RefreshTokenRequest>,
+    Json(refresh_req): Json<auth::RefreshRequest>,
 ) -> impl IntoResponse {
-    match auth::email_refresh_handler(&state.auth_config, refresh_req).await {
-        Ok(response) => {
+    match auth::refresh_handler(Json(refresh_req)).await {
+        response => {
             counter!("gw.auth.refresh.success").increment(1);
-            Json::<auth::EmailAuthResponse>(response).into_response()
-        }
-        Err(e) => {
-            counter!("gw.auth.refresh.failed").increment(1);
-            error!("Token refresh failed: {}", e);
-            (axum::http::StatusCode::UNAUTHORIZED, "Invalid refresh token").into_response()
+            response
         }
     }
 }
@@ -982,8 +1159,23 @@ async fn ws_session(
                                             }
                                         )).await;
                                     }
+                                    FramePayload::State { message: state_msg } => {
+                                        // Handle quantized state messages (snapshot/delta)
+                                        // For now, use default room_id since state messages don't carry room context
+                                        let default_room_id = "default_room";
+                                        match handle_quantized_state_message(&state_msg, &transport_registry, default_room_id, &connection_id).await {
+                                            Ok(response_frame) => {
+                                                if let Some(frame) = response_frame {
+                                                    broadcast_to_transport(&transport_registry, default_room_id, &connection_id, frame).await;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Failed to handle quantized state message: {:?}", e);
+                                            }
+                                        }
+                                    }
                                     _ => {
-                                        // echo nguyên gốc nếu không phải các message đặc biệt
+                                        // echo nguy├¬n gß╗æc nß║┐u kh├┤ng phß║úi c├íc message ─æß║╖c biß╗çt
                                         let _ = socket.send(axum::extract::ws::Message::Binary(bytes)).await;
                                     }
                                 }
@@ -997,9 +1189,6 @@ async fn ws_session(
                                 }
                             }
                         }
-                    }
-                    Some(Ok(axum::extract::ws::Message::Text(s))) => {
-                        let _ = socket.send(axum::extract::ws::Message::Text(s)).await;
                     }
                     Some(Ok(axum::extract::ws::Message::Ping(p))) => {
                         let _ = socket.send(axum::extract::ws::Message::Pong(p)).await;
@@ -1038,6 +1227,66 @@ async fn ws_session(
     }
 
     let _ = socket.close().await;
+}
+
+// Handle quantized state messages (snapshot/delta encoding)
+async fn handle_quantized_state_message(
+    state_msg: &StateMessage,
+    _transport_registry: &TransportRegistry,
+    _room_id: &str,
+    _sender_peer_id: &str,
+) -> Result<Option<Frame>, Box<dyn std::error::Error + Send + Sync>> {
+    let quantization_config = QuantizationConfig::default();
+
+    match state_msg {
+        StateMessage::Snapshot { tick, entities } => {
+            // TODO: Implement quantized snapshot encoding when binary protocol is ready
+            // For now, forward as regular event for testing
+            let event_frame = Frame::state(
+                0,
+                chrono::Utc::now().timestamp_millis() as u64,
+                StateMessage::Event {
+                    name: "snapshot".to_string(),
+                    data: serde_json::json!({
+                        "tick": tick,
+                        "entity_count": entities.len(),
+                        "quantized": false // Mark as not quantized for now
+                    })
+                }
+            );
+            Ok(Some(event_frame))
+        }
+        StateMessage::Delta { tick, changes } => {
+            // TODO: Implement quantized delta encoding when binary protocol is ready
+            // For now, forward as regular event for testing
+            let event_frame = Frame::state(
+                0,
+                chrono::Utc::now().timestamp_millis() as u64,
+                StateMessage::Event {
+                    name: "delta".to_string(),
+                    data: serde_json::json!({
+                        "tick": tick,
+                        "change_count": changes.len(),
+                        "quantized": false // Mark as not quantized for now
+                    })
+                }
+            );
+            Ok(Some(event_frame))
+        }
+        StateMessage::Event { name, data } => {
+            // Events are forwarded as-is (not quantized)
+            let event_frame = Frame::state(
+                0,
+                chrono::Utc::now().timestamp_millis() as u64,
+                StateMessage::Event {
+                    name: name.clone(),
+                    data: data.clone(),
+                }
+            );
+
+            Ok(Some(event_frame))
+        }
+    }
 }
 
 // Helper function to establish WebRTC connection with fallback

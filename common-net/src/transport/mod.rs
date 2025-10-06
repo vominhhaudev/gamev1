@@ -10,15 +10,12 @@ pub mod manager;
 pub mod traits;
 pub mod metrics;
 
-pub use manager::*;
-pub use traits::*;
-pub use metrics::*;
 
-use std::{fmt::Display, collections::HashMap};
+use std::fmt::Display;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use crate::compression::{CompressionConfig, CompressedData};
+use crate::compression::CompressionConfig;
 use chrono::{DateTime, Utc};
 
 use crate::message::Frame;
@@ -176,6 +173,7 @@ mod tests {
     struct MockTransport {
         kind: TransportKind,
         queue: VecDeque<Frame>,
+        compression_config: CompressionConfig,
     }
 
     #[async_trait]
@@ -199,14 +197,29 @@ mod tests {
             self.queue.clear();
             Ok(())
         }
+
+        fn set_compression_config(&mut self, config: CompressionConfig) {
+            self.compression_config = config;
+        }
+
+        fn get_compression_config(&self) -> &CompressionConfig {
+            &self.compression_config
+        }
+    }
+
+    impl MockTransport {
+        pub fn new(kind: TransportKind) -> Self {
+            Self {
+                kind,
+                queue: VecDeque::new(),
+                compression_config: CompressionConfig::default(),
+            }
+        }
     }
 
     #[tokio::test]
     async fn control_roundtrip() {
-        let mut transport = MockTransport {
-            kind: TransportKind::WebSocket,
-            queue: VecDeque::new(),
-        };
+        let mut transport = MockTransport::new(TransportKind::WebSocket);
 
         send_control(&mut transport, 1, 123, ControlMessage::Ping { nonce: 7 })
             .await

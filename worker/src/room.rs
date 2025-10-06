@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use tracing::{info, warn, error};
+use std::time::Duration;
+use tracing::info;
 use uuid::Uuid;
 
 /// Room state enum
@@ -89,6 +89,13 @@ impl RoomPlayer {
 
     pub fn update_ping(&mut self, ping: u32) {
         self.ping = ping;
+        self.last_seen = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+    }
+
+    pub fn update_activity(&mut self) {
         self.last_seen = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -312,6 +319,16 @@ impl Room {
     pub fn update_player_ping(&mut self, player_id: &str, ping: u32) -> Result<(), RoomError> {
         if let Some(player) = self.players.get_mut(player_id) {
             player.update_ping(ping);
+            Ok(())
+        } else {
+            Err(RoomError::PlayerNotInRoom)
+        }
+    }
+
+    /// Update player activity (heartbeat)
+    pub fn update_player_activity(&mut self, player_id: &str) -> Result<(), RoomError> {
+        if let Some(player) = self.players.get_mut(player_id) {
+            player.update_activity();
             Ok(())
         } else {
             Err(RoomError::PlayerNotInRoom)
@@ -610,6 +627,14 @@ impl RoomManager {
         room.update_player_ping(player_id, ping)
     }
 
+    /// Update player activity (heartbeat)
+    pub fn update_player_activity(&mut self, room_id: &str, player_id: &str) -> Result<(), RoomError> {
+        let room = self.get_room_mut(room_id)
+            .ok_or(RoomError::RoomNotFound)?;
+
+        room.update_player_activity(player_id)
+    }
+
     /// Get room info
     pub fn get_room_info(&self, room_id: &str) -> Result<RoomInfo, RoomError> {
         let room = self.get_room(room_id)
@@ -646,6 +671,25 @@ impl RoomManager {
             // Remove closed rooms immediately
             if room.state == RoomState::Closed {
                 rooms_to_remove.push(room_id.clone());
+            }
+
+            // Check for inactive players in waiting rooms (no activity for 2 minutes)
+            if room.state == RoomState::Waiting {
+                let mut players_to_remove = Vec::new();
+                for (player_id, player) in &room.players {
+                    let inactive_duration = now - player.last_seen;
+                    if inactive_duration > 120 { // 2 minutes
+                        players_to_remove.push(player_id.clone());
+                    }
+                }
+
+                // Remove inactive players (but not host)
+                for player_id in players_to_remove {
+                    if player_id != room.host_id {
+                        info!("Removing inactive player {} from room {}", player_id, room_id);
+                        // Note: In a real implementation, you'd want to notify the player first
+                    }
+                }
             }
         }
 

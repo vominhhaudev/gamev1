@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::TcpListener, sync::Arc};
+use std::{net::TcpListener, sync::Arc};
 
 use proto::worker::v1::{
     worker_client::WorkerClient,
@@ -21,7 +21,7 @@ use tonic::{
 };
 use tracing::{error, info, warn};
 
-use crate::{simulation::{GameWorld, PlayerInput, SpectatorCameraMode}, simulation_metrics, validation::{InputValidator, ValidationError}, room::{RoomManager, RoomSettings, GameMode, RoomListFilter, RoomInfo, RoomState}};
+use crate::{simulation::{GameWorld, PlayerInput, SpectatorCameraMode}, simulation_metrics, room::{RoomManager, RoomSettings, GameMode, RoomListFilter, RoomState}};
 
 pub struct WorkerState {
     pub game_world: RwLock<GameWorld>,
@@ -74,8 +74,8 @@ impl Worker for WorkerService {
         let player_position = [0.0, 5.0, 0.0]; // Player spawn position
         let view_distance = 50.0; // Default view distance
 
-        // For now, use full snapshot until AOI is properly implemented
-        let snapshot = game_world.create_snapshot();
+        // Use AOI-optimized snapshot for the new player
+        let snapshot = game_world.get_snapshot_for_player(&player_id);
 
         // Update metrics
         let active_players = 1; // For now, just count this player
@@ -83,14 +83,14 @@ impl Worker for WorkerService {
 
         info!(%room_id, %player_id, "worker: player joined successfully");
 
-        let snapshot_json = serde_json::to_string(&snapshot)
+        let snapshot_json = snapshot.to_json_string()
             .unwrap_or_else(|_| json::empty_snapshot().to_string());
 
         Ok(Response::new(JoinRoomResponse {
             ok: true,
             room_id,
             snapshot: Some(Snapshot {
-                tick: snapshot.tick,
+                tick: snapshot.tick(),
                 payload_json: snapshot_json,
             }),
             error: String::new(),
@@ -162,20 +162,20 @@ impl Worker for WorkerService {
         // Run game tick để process input
         game_world.tick();
 
-        // Get current snapshot with AOI optimization
+        // Get current snapshot with AOI optimization and delta encoding
         let snapshot = game_world.get_snapshot_for_player(&player_id);
 
         // Serialize snapshot
-        let snapshot_json = serde_json::to_string(&snapshot)
+        let snapshot_json = snapshot.to_json_string()
             .unwrap_or_else(|_| json::empty_snapshot().to_string());
 
-        info!(room_id = %req.room_id, tick = %snapshot.tick, "worker: input processed, snapshot generated");
+        info!(room_id = %req.room_id, tick = %snapshot.tick(), "worker: input processed, snapshot generated");
 
         Ok(Response::new(PushInputResponse {
             ok: true,
             room_id: req.room_id,
             snapshot: Some(Snapshot {
-                tick: snapshot.tick,
+                tick: snapshot.tick(),
                 payload_json: snapshot_json,
             }),
             error: String::new(),

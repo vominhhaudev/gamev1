@@ -1,5 +1,20 @@
 export type TransportKind = 'webtransport' | 'webrtc' | 'websocket';
 
+// Quantization configuration for client-side decompression
+export interface QuantizationConfig {
+  position_factor: number;
+  rotation_factor: number;
+  scale_factor: number;
+  velocity_factor: number;
+}
+
+export const DEFAULT_QUANTIZATION_CONFIG: QuantizationConfig = {
+  position_factor: 0.01,      // 0.01 units per step = ±327.68 units range
+  rotation_factor: 1.0,       // 1 degree per step = ±128 degrees range
+  scale_factor: 0.01,         // 0.01 scale per step = ±1.28 scale range
+  velocity_factor: 0.1,       // 0.1 units/sec per step = ±3276.8 units/sec range
+};
+
 export interface TransportHandle {
   kind: TransportKind;
   socket: WebSocket;
@@ -208,3 +223,88 @@ async function connectWebSocket(endpoint: string, externalAuthToken?: string): P
 }
 
 const NEGOTIATE_PATH = '/negotiate';
+
+// Quantization utilities for client-side decompression
+export function dequantizePosition(position: [number, number, number], config: QuantizationConfig): [number, number, number] {
+  return [
+    position[0] * config.position_factor,
+    position[1] * config.position_factor,
+    position[2] * config.position_factor,
+  ];
+}
+
+export function dequantizeRotation(rotation: number, config: QuantizationConfig): number {
+  return rotation * config.rotation_factor;
+}
+
+export function dequantizeScale(scale: number, config: QuantizationConfig): number {
+  return scale * config.scale_factor;
+}
+
+export function dequantizeVelocity(velocity: [number, number, number], config: QuantizationConfig): [number, number, number] {
+  return [
+    velocity[0] * config.velocity_factor,
+    velocity[1] * config.velocity_factor,
+    velocity[2] * config.velocity_factor,
+  ];
+}
+
+export function dequantizeSmallInt(value: number, _config: QuantizationConfig): number {
+  return value;
+}
+
+// Handle quantized snapshot message from server
+export function handleQuantizedSnapshot(eventData: any): any {
+  const config = DEFAULT_QUANTIZATION_CONFIG;
+
+  if (eventData.encoding === 'bincode_quantized' && eventData.tick !== undefined) {
+    // In a full implementation, this would:
+    // 1. Receive the binary quantized data
+    // 2. Decompress it using bincode
+    // 3. Dequantize the values
+    // 4. Return the reconstructed entities
+
+    console.log(`📦 Received quantized snapshot: tick=${eventData.tick}, size=${eventData.size} bytes`);
+
+    // For now, return a mock structure
+    return {
+      tick: eventData.tick,
+      entities: [],
+      quantized: true,
+      compression_ratio: eventData.size > 0 ? (1 - eventData.size / 1000) * 100 : 0 // Mock calculation
+    };
+  }
+
+  return null;
+}
+
+// Handle quantized delta message from server
+export function handleQuantizedDelta(eventData: any): any {
+  const config = DEFAULT_QUANTIZATION_CONFIG;
+
+  if (eventData.encoding === 'bincode_quantized' && eventData.tick !== undefined) {
+    // In a full implementation, this would:
+    // 1. Receive the binary quantized data
+    // 2. Decompress it using bincode
+    // 3. Dequantize the values
+    // 4. Return the reconstructed changes
+
+    console.log(`🔄 Received quantized delta: tick=${eventData.tick}, size=${eventData.size} bytes`);
+
+    // For now, return a mock structure
+    return {
+      tick: eventData.tick,
+      changes: [],
+      quantized: true,
+      compression_ratio: eventData.size > 0 ? (1 - eventData.size / 500) * 100 : 0 // Mock calculation
+    };
+  }
+
+  return null;
+}
+
+// Calculate bandwidth savings from quantization
+export function calculateBandwidthSavings(originalBytes: number, quantizedBytes: number): number {
+  if (originalBytes === 0) return 0;
+  return ((originalBytes - quantizedBytes) / originalBytes) * 100;
+}

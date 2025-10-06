@@ -4,10 +4,10 @@ use rapier3d::prelude::*;
 use rapier3d::geometry::DefaultBroadPhase;
 use rapier3d::dynamics::{MultibodyJointSet, ImpulseJointSet};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::{collections::HashMap, time::{Duration, Instant}};
 use tracing;
 
-use crate::validation::{InputValidator, ValidationConfig, ValidationError};
+use crate::validation::InputValidator;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -101,6 +101,519 @@ pub enum ChatMessageType {
     Team,      // Message gửi tới team members
     Whisper,   // Private message tới player cụ thể
     System,    // System announcement
+}
+
+// ===== QUANTIZATION & DELTA ENCODING SYSTEM =====
+
+// Quantization parameters
+pub const POSITION_SCALE: f32 = 100.0; // Scale factor để chuyển f32 thành i16
+pub const ROTATION_SCALE: f32 = 10000.0; // Scale factor cho quaternion components
+pub const VELOCITY_SCALE: f32 = 50.0; // Scale factor cho velocity
+
+/// Quantized transform để giảm kích thước dữ liệu
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedTransform {
+    pub position: (i16, i16, i16),  // x, y, z quantized positions
+    pub rotation: (i16, i16, i16, i16), // quaternion components quantized
+}
+
+/// Quantized velocity để giảm kích thước dữ liệu
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedVelocity {
+    pub velocity: (i16, i16, i16),  // x, y, z velocity components
+    pub angular_velocity: (i16, i16, i16), // angular velocity components
+}
+
+/// Quantized entity snapshot để giảm băng thông
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedEntitySnapshot {
+    pub id: u32,
+    pub transform: QuantizedTransform,
+    pub velocity: Option<QuantizedVelocity>,
+    pub player: Option<QuantizedPlayer>,
+    pub pickup: Option<QuantizedPickup>,
+    pub obstacle: Option<QuantizedObstacle>,
+    pub power_up: Option<QuantizedPowerUp>,
+    pub enemy: Option<QuantizedEnemy>,
+}
+
+/// Quantized player data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedPlayer {
+    pub id: String,
+    pub score: u32,
+    pub view_distance: i16, // quantized view distance
+}
+
+/// Quantized pickup data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedPickup {
+    pub value: u32,
+}
+
+/// Quantized obstacle data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedObstacle {
+    pub obstacle_type: String,
+}
+
+/// Quantized power-up data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedPowerUp {
+    pub power_type: String,
+    pub duration: u16, // quantized duration in ticks
+    pub value: u32,
+}
+
+/// Quantized enemy data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedEnemy {
+    pub enemy_type: String,
+    pub damage: u32,
+    pub speed: i16, // quantized speed
+}
+
+/// Delta snapshot - chỉ chứa dữ liệu đã thay đổi
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaSnapshot {
+    pub tick: u64,
+    pub base_tick: u64, // Reference tick cho delta
+    pub created_entities: Vec<QuantizedEntitySnapshot>, // Entities mới được tạo
+    pub updated_entities: Vec<QuantizedEntitySnapshot>, // Entities có thay đổi
+    pub deleted_entities: Vec<u32>, // Entity IDs bị xóa
+    pub chat_messages: Vec<ChatMessage>, // Chat messages mới
+    pub new_spectators: Vec<SpectatorSnapshot>, // Spectators mới
+    pub removed_spectators: Vec<String>, // Spectator IDs bị xóa
+}
+
+/// Full snapshot với quantization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantizedSnapshot {
+    pub tick: u64,
+    pub entities: Vec<QuantizedEntitySnapshot>,
+    pub chat_messages: Vec<ChatMessage>,
+    pub spectators: Vec<SpectatorSnapshot>,
+}
+
+/// Quantization utilities
+impl QuantizedTransform {
+    /// Convert f32 position to i16 với scale factor
+    pub fn from_f32(position: [f32; 3], rotation: [f32; 4]) -> Self {
+        Self {
+            position: (
+                (position[0] * POSITION_SCALE) as i16,
+                (position[1] * POSITION_SCALE) as i16,
+                (position[2] * POSITION_SCALE) as i16,
+            ),
+            rotation: (
+                (rotation[0] * ROTATION_SCALE) as i16,
+                (rotation[1] * ROTATION_SCALE) as i16,
+                (rotation[2] * ROTATION_SCALE) as i16,
+                (rotation[3] * ROTATION_SCALE) as i16,
+            ),
+        }
+    }
+
+    /// Convert i16 back to f32
+    pub fn to_f32(&self) -> ([f32; 3], [f32; 4]) {
+        (
+            [
+                self.position.0 as f32 / POSITION_SCALE,
+                self.position.1 as f32 / POSITION_SCALE,
+                self.position.2 as f32 / POSITION_SCALE,
+            ],
+            [
+                self.rotation.0 as f32 / ROTATION_SCALE,
+                self.rotation.1 as f32 / ROTATION_SCALE,
+                self.rotation.2 as f32 / ROTATION_SCALE,
+                self.rotation.3 as f32 / ROTATION_SCALE,
+            ],
+        )
+    }
+}
+
+impl QuantizedVelocity {
+    /// Convert f32 velocity to i16
+    pub fn from_f32(velocity: [f32; 3], angular_velocity: [f32; 3]) -> Self {
+        Self {
+            velocity: (
+                (velocity[0] * VELOCITY_SCALE) as i16,
+                (velocity[1] * VELOCITY_SCALE) as i16,
+                (velocity[2] * VELOCITY_SCALE) as i16,
+            ),
+            angular_velocity: (
+                (angular_velocity[0] * VELOCITY_SCALE) as i16,
+                (angular_velocity[1] * VELOCITY_SCALE) as i16,
+                (angular_velocity[2] * VELOCITY_SCALE) as i16,
+            ),
+        }
+    }
+
+    /// Convert i16 back to f32
+    pub fn to_f32(&self) -> ([f32; 3], [f32; 3]) {
+        (
+            [
+                self.velocity.0 as f32 / VELOCITY_SCALE,
+                self.velocity.1 as f32 / VELOCITY_SCALE,
+                self.velocity.2 as f32 / VELOCITY_SCALE,
+            ],
+            [
+                self.angular_velocity.0 as f32 / VELOCITY_SCALE,
+                self.angular_velocity.1 as f32 / VELOCITY_SCALE,
+                self.angular_velocity.2 as f32 / VELOCITY_SCALE,
+            ],
+        )
+    }
+}
+
+/// Delta encoder để tính toán sự khác biệt giữa snapshots
+pub struct DeltaEncoder {
+    /// Previous snapshot để so sánh
+    pub previous_snapshot: Option<QuantizedSnapshot>,
+    /// Threshold để quyết định có nên tạo delta hay không
+    pub delta_threshold: usize, // Số entities thay đổi tối thiểu để tạo delta
+}
+
+impl DeltaEncoder {
+    pub fn new(delta_threshold: usize) -> Self {
+        Self {
+            previous_snapshot: None,
+            delta_threshold,
+        }
+    }
+
+    /// Encode snapshot thành delta hoặc full snapshot
+    pub fn encode_snapshot(&mut self, snapshot: GameSnapshot, current_tick: u64) -> EncodedSnapshot {
+        let quantized = self.quantize_snapshot(snapshot);
+
+        if let Some(ref prev) = self.previous_snapshot {
+            // Tính toán delta nếu có đủ sự thay đổi
+            let delta = self.create_delta(&quantized, prev, current_tick);
+            if self.should_use_delta(&delta) {
+                EncodedSnapshot::Delta(delta)
+            } else {
+                // Gửi full snapshot nếu delta quá lớn
+                self.previous_snapshot = Some(quantized.clone());
+                EncodedSnapshot::Full(quantized)
+            }
+        } else {
+            // First snapshot luôn là full
+            self.previous_snapshot = Some(quantized.clone());
+            EncodedSnapshot::Full(quantized)
+        }
+    }
+
+    /// Quantize GameSnapshot thành QuantizedSnapshot
+    fn quantize_snapshot(&self, snapshot: GameSnapshot) -> QuantizedSnapshot {
+        let entities = snapshot.entities.into_iter().map(|entity| {
+            let quantized_transform = QuantizedTransform::from_f32(
+                entity.transform.position,
+                entity.transform.rotation,
+            );
+
+            let quantized_velocity = entity.velocity.map(|vel| {
+                QuantizedVelocity::from_f32(vel.velocity, vel.angular_velocity)
+            });
+
+            QuantizedEntitySnapshot {
+                id: entity.id,
+                transform: quantized_transform,
+                velocity: quantized_velocity,
+                player: entity.player.map(|p| QuantizedPlayer {
+                    id: p.id,
+                    score: p.score,
+                    view_distance: (p.view_distance * POSITION_SCALE) as i16,
+                }),
+                pickup: entity.pickup.map(|p| QuantizedPickup { value: p.value }),
+                obstacle: entity.obstacle.map(|o| QuantizedObstacle { obstacle_type: o.obstacle_type }),
+                power_up: entity.power_up.map(|pu| QuantizedPowerUp {
+                    power_type: pu.power_type,
+                    duration: (pu.duration.as_secs() * 60) as u16, // Convert to ticks
+                    value: pu.value,
+                }),
+                enemy: entity.enemy.map(|e| QuantizedEnemy {
+                    enemy_type: e.enemy_type,
+                    damage: e.damage,
+                    speed: (e.speed * VELOCITY_SCALE) as i16,
+                }),
+            }
+        }).collect();
+
+        QuantizedSnapshot {
+            tick: snapshot.tick,
+            entities,
+            chat_messages: snapshot.chat_messages,
+            spectators: snapshot.spectators,
+        }
+    }
+
+    /// Tạo delta từ current snapshot so với previous
+    fn create_delta(&self, current: &QuantizedSnapshot, previous: &QuantizedSnapshot, current_tick: u64) -> DeltaSnapshot {
+        // Find created entities (in current but not in previous)
+        let mut created_entities = Vec::new();
+        for entity in &current.entities {
+            if !previous.entities.iter().any(|e| e.id == entity.id) {
+                created_entities.push(entity.clone());
+            }
+        }
+
+        // Find updated entities (exist in both but different)
+        let mut updated_entities = Vec::new();
+        for current_entity in &current.entities {
+            if let Some(prev_entity) = previous.entities.iter().find(|e| e.id == current_entity.id) {
+                // Compare nếu có sự khác biệt đáng kể
+                if self.has_significant_change(current_entity, prev_entity) {
+                    updated_entities.push(current_entity.clone());
+                }
+            }
+        }
+
+        // Find deleted entities (in previous but not in current)
+        let mut deleted_entities = Vec::new();
+        for prev_entity in &previous.entities {
+            if !current.entities.iter().any(|e| e.id == prev_entity.id) {
+                deleted_entities.push(prev_entity.id);
+            }
+        }
+
+        // New chat messages
+        let mut new_chat_messages = Vec::new();
+        for chat_msg in &current.chat_messages {
+            if !previous.chat_messages.iter().any(|m| m.id == chat_msg.id) {
+                new_chat_messages.push(chat_msg.clone());
+            }
+        }
+
+        // New spectators
+        let mut new_spectators = Vec::new();
+        for spectator in &current.spectators {
+            if !previous.spectators.iter().any(|s| s.id == spectator.id) {
+                new_spectators.push(spectator.clone());
+            }
+        }
+
+        // Removed spectators
+        let mut removed_spectators = Vec::new();
+        for prev_spectator in &previous.spectators {
+            if !current.spectators.iter().any(|s| s.id == prev_spectator.id) {
+                removed_spectators.push(prev_spectator.id.clone());
+            }
+        }
+
+        DeltaSnapshot {
+            tick: current.tick,
+            base_tick: previous.tick,
+            created_entities,
+            updated_entities,
+            deleted_entities,
+            chat_messages: new_chat_messages,
+            new_spectators,
+            removed_spectators,
+        }
+    }
+
+    /// Check if entity có sự thay đổi đáng kể để gửi delta
+    fn has_significant_change(&self, current: &QuantizedEntitySnapshot, previous: &QuantizedEntitySnapshot) -> bool {
+        // Check position change
+        let pos_diff_x = (current.transform.position.0 - previous.transform.position.0).abs() > 1;
+        let pos_diff_y = (current.transform.position.1 - previous.transform.position.1).abs() > 1;
+        let pos_diff_z = (current.transform.position.2 - previous.transform.position.2).abs() > 1;
+
+        // Check velocity change (nếu có)
+        let vel_changed = match (&current.velocity, &previous.velocity) {
+            (Some(curr_vel), Some(prev_vel)) => {
+                (curr_vel.velocity.0 - prev_vel.velocity.0).abs() > 2 ||
+                (curr_vel.velocity.1 - prev_vel.velocity.1).abs() > 2 ||
+                (curr_vel.velocity.2 - prev_vel.velocity.2).abs() > 2
+            }
+            (Some(_), None) | (None, Some(_)) => true,
+            (None, None) => false,
+        };
+
+        pos_diff_x || pos_diff_y || pos_diff_z || vel_changed
+    }
+
+    /// Decide có nên sử dụng delta hay không dựa trên kích thước
+    fn should_use_delta(&self, delta: &DeltaSnapshot) -> bool {
+        let total_changes = delta.created_entities.len() + delta.updated_entities.len() + delta.deleted_entities.len();
+        total_changes >= self.delta_threshold
+    }
+}
+
+/// Encoded snapshot - có thể là full hoặc delta
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum EncodedSnapshot {
+    Full(QuantizedSnapshot),
+    Delta(DeltaSnapshot),
+}
+
+impl EncodedSnapshot {
+    /// Get tick number from snapshot
+    pub fn tick(&self) -> u64 {
+        match self {
+            EncodedSnapshot::Full(snapshot) => snapshot.tick,
+            EncodedSnapshot::Delta(delta) => delta.tick,
+        }
+    }
+
+    /// Get payload as JSON string
+    pub fn to_json_string(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+}
+
+// ===== AOI (Area of Interest) System =====
+
+/// Grid cell coordinates (x, z) - chỉ dùng 2D cho simplicity
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GridCell {
+    pub x: i32,
+    pub z: i32,
+}
+
+/// Grid-based spatial partitioning system
+#[derive(Debug)]
+pub struct SpatialGrid {
+    /// Cell size in world units (ví dụ: 50.0)
+    pub cell_size: f32,
+    /// Map từ cell coordinates tới list of entities
+    pub cells: HashMap<GridCell, Vec<Entity>>,
+    /// Cache để track entity positions để detect movement
+    pub entity_positions: HashMap<Entity, [f32; 3]>,
+}
+
+/// Player's Area of Interest - các cells mà player có thể thấy
+#[derive(Debug, Clone)]
+pub struct PlayerAOI {
+    pub player_entity: Entity,
+    pub visible_cells: Vec<GridCell>,
+    pub last_update_tick: u64,
+}
+
+impl SpatialGrid {
+    pub fn new(cell_size: f32) -> Self {
+        Self {
+            cell_size,
+            cells: HashMap::new(),
+            entity_positions: HashMap::new(),
+        }
+    }
+
+    /// Convert world position to grid cell coordinates
+    pub fn world_to_cell(&self, position: [f32; 3]) -> GridCell {
+        GridCell {
+            x: (position[0] / self.cell_size).floor() as i32,
+            z: (position[2] / self.cell_size).floor() as i32,
+        }
+    }
+
+    /// Add entity to grid at specific position
+    pub fn add_entity(&mut self, entity: Entity, position: [f32; 3]) {
+        let cell = self.world_to_cell(position);
+
+        // Remove from old position if exists
+        if let Some(old_pos) = self.entity_positions.get(&entity) {
+            let old_cell = self.world_to_cell(*old_pos);
+            if let Some(entities) = self.cells.get_mut(&old_cell) {
+                entities.retain(|&e| e != entity);
+                if entities.is_empty() {
+                    self.cells.remove(&old_cell);
+                }
+            }
+        }
+
+        // Add to new position
+        self.cells.entry(cell).or_insert_with(Vec::new).push(entity);
+        self.entity_positions.insert(entity, position);
+    }
+
+    /// Remove entity from grid
+    pub fn remove_entity(&mut self, entity: Entity) {
+        if let Some(position) = self.entity_positions.remove(&entity) {
+            let cell = self.world_to_cell(position);
+            if let Some(entities) = self.cells.get_mut(&cell) {
+                entities.retain(|&e| e != entity);
+                if entities.is_empty() {
+                    self.cells.remove(&cell);
+                }
+            }
+        }
+    }
+
+    /// Update entity position in grid
+    pub fn update_entity_position(&mut self, entity: Entity, new_position: [f32; 3]) {
+        let old_cell = self.entity_positions.get(&entity).map(|pos| self.world_to_cell(*pos));
+        let new_cell = self.world_to_cell(new_position);
+
+        // Nếu cell không đổi, chỉ cần cập nhật position
+        if old_cell == Some(new_cell) {
+            self.entity_positions.insert(entity, new_position);
+            return;
+        }
+
+        // Nếu cell thay đổi, cần di chuyển entity
+        if let Some(old_cell) = old_cell {
+            if let Some(entities) = self.cells.get_mut(&old_cell) {
+                entities.retain(|&e| e != entity);
+                if entities.is_empty() {
+                    self.cells.remove(&old_cell);
+                }
+            }
+        }
+
+        // Add to new cell
+        self.cells.entry(new_cell).or_insert_with(Vec::new).push(entity);
+        self.entity_positions.insert(entity, new_position);
+    }
+
+    /// Get all entities in a specific cell
+    pub fn get_entities_in_cell(&self, cell: GridCell) -> Option<&Vec<Entity>> {
+        self.cells.get(&cell)
+    }
+
+    /// Get all entities in a cell and its 8 neighbors (3x3 grid)
+    pub fn get_entities_in_aoi(&self, center_cell: GridCell) -> Vec<Entity> {
+        let mut entities = Vec::new();
+
+        // Check center cell and 8 neighbors
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let cell = GridCell {
+                    x: center_cell.x + dx,
+                    z: center_cell.z + dz,
+                };
+
+                if let Some(cell_entities) = self.cells.get(&cell) {
+                    entities.extend(cell_entities.iter().copied());
+                }
+            }
+        }
+
+        entities
+    }
+
+    /// Get player's AOI cells (center cell + neighbors)
+    pub fn get_player_aoi_cells(&self, player_position: [f32; 3]) -> Vec<GridCell> {
+        let center_cell = self.world_to_cell(player_position);
+        let mut cells = Vec::new();
+
+        // Get 3x3 grid of cells around player
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                cells.push(GridCell {
+                    x: center_cell.x + dx,
+                    z: center_cell.z + dz,
+                });
+            }
+        }
+
+        cells
+    }
+
+    /// Cleanup empty cells to save memory
+    pub fn cleanup_empty_cells(&mut self) {
+        self.cells.retain(|_, entities| !entities.is_empty());
+    }
 }
 
 // Simplified version for serialization
@@ -248,6 +761,11 @@ pub struct GameWorld {
     pub last_tick: Instant,
     pub accumulator: Duration,
     pub tick_rate: Duration, // 60Hz = 16.67ms per tick
+    pub spatial_grid: SpatialGrid, // AOI system
+    pub player_aois: HashMap<String, PlayerAOI>, // Track each player's AOI
+    pub delta_encoder: DeltaEncoder, // Delta encoding system
+    pub last_keyframe_tick: u64, // Last time we sent a full snapshot
+    pub current_tick: u64, // Current tick count (separate from world resource)
 }
 
 impl Default for GameWorld {
@@ -295,11 +813,16 @@ impl GameWorld {
             last_tick: Instant::now(),
             accumulator: Duration::from_secs(0),
             tick_rate: Duration::from_millis(16), // 60Hz
+            spatial_grid: SpatialGrid::new(50.0), // 50 unit cells
+            player_aois: HashMap::new(),
+            delta_encoder: DeltaEncoder::new(5), // Delta threshold: 5 entities
+            last_keyframe_tick: 0,
+            current_tick: 0,
         }
     }
 
-    /// Main game loop với fixed timestep
-    pub fn tick(&mut self) -> GameSnapshot {
+    /// Main game loop với fixed timestep và delta encoding
+    pub fn tick(&mut self) -> EncodedSnapshot {
         let now = std::time::Instant::now();
         self.accumulator += now - self.last_tick;
         self.last_tick = now;
@@ -308,16 +831,23 @@ impl GameWorld {
         let mut ticks = 0;
         while self.accumulator >= self.tick_rate && ticks < 3 { // Max 3 ticks per frame
             self.fixed_update();
+            self.current_tick += 1; // Increment tick count
             self.accumulator -= self.tick_rate;
             ticks += 1;
         }
 
-        // Luôn trả về snapshot mới nhất, tick count sẽ được cập nhật trong fixed_update
-        self.create_snapshot()
+        // Get current tick count
+        let current_tick = self.current_tick;
+
+        // Create base snapshot for encoding
+        let base_snapshot = self.create_snapshot();
+
+        // Use delta encoding
+        self.delta_encoder.encode_snapshot(base_snapshot, current_tick)
     }
 
     /// Chạy simulation trong thời gian ngắn để test
-    pub fn run_simulation_for_test(&mut self, duration_secs: f32) -> Vec<GameSnapshot> {
+    pub fn run_simulation_for_test(&mut self, duration_secs: f32) -> Vec<EncodedSnapshot> {
         let mut snapshots = Vec::new();
         let target_ticks = (duration_secs * 60.0) as u32; // 60 FPS
 
@@ -326,12 +856,21 @@ impl GameWorld {
             self.add_player("test_player".to_string());
         }
 
-        for i in 0..target_ticks {
-            // Gọi fixed_update trực tiếp để đảm bảo tick count tăng
-            self.fixed_update();
-            let snapshot = self.create_snapshot();
+        // Lưu tick count hiện tại để kiểm tra sau
+        let initial_tick = self.get_current_tick();
+
+        // Force tick bằng cách set accumulator đủ lớn
+        self.accumulator = self.tick_rate * target_ticks as u32;
+
+        for _i in 0..target_ticks {
+            // Get encoded snapshot (includes delta encoding)
+            let snapshot = self.tick();
             snapshots.push(snapshot);
         }
+
+        // Debug: kiểm tra tick count đã tăng chưa
+        let final_tick = self.get_current_tick();
+        println!("Initial tick: {}, Final tick: {}, Target ticks: {}", initial_tick, final_tick, target_ticks);
 
         snapshots
     }
@@ -342,25 +881,56 @@ impl GameWorld {
         self.create_snapshot()
     }
 
-    /// Get current snapshot for a specific player using AOI optimization
-    pub fn get_snapshot_for_player(&mut self, player_id: &str) -> GameSnapshot {
+    /// Get current tick count
+    pub fn get_current_tick(&self) -> u64 {
+        self.current_tick
+    }
+
+    /// Force send keyframe (full snapshot) for specific player
+    pub fn force_keyframe_for_player(&mut self, player_id: &str) -> EncodedSnapshot {
+        // Create fresh delta encoder for this player
+        let mut player_encoder = DeltaEncoder::new(1); // Always send full for keyframe
+
+        let base_snapshot = self.create_snapshot();
+        let current_tick = self.world.resource::<TickCount>().0;
+
+        player_encoder.encode_snapshot(base_snapshot, current_tick)
+    }
+
+    /// Get current snapshot for a specific player using AOI optimization và delta encoding
+    pub fn get_snapshot_for_player(&mut self, player_id: &str) -> EncodedSnapshot {
         let player_position = self.get_player_position(player_id)
             .unwrap_or([0.0, 5.0, 0.0]);
-        let view_distance = self.get_player_view_distance(player_id)
-            .unwrap_or(50.0); // Default view distance
+
+        // Update player's AOI tracking
+        self.update_player_aoi_grid(player_id);
+
+        // Get entities in player's AOI using spatial grid
+        let aoi_entities = if let Some(player_aoi) = self.player_aois.get(player_id) {
+            let center_cell = self.spatial_grid.world_to_cell(player_position);
+            self.spatial_grid.get_entities_in_aoi(center_cell)
+        } else {
+            // Fallback: get all entities if player not tracked
+            let mut all_entities = Vec::new();
+            let mut query = self.world.query::<Entity>();
+            for entity in query.iter(&self.world) {
+                all_entities.push(entity);
+            }
+            all_entities
+        };
 
         // Create AOI-optimized snapshot
         let mut entities = Vec::new();
-        let mut query = self.world.query::<(Entity, &TransformQ, Option<&Player>, Option<&Pickup>, Option<&Obstacle>, Option<&PowerUp>, Option<&Enemy>)>();
-
-        for (entity, transform, player, pickup, obstacle, power_up, enemy) in query.iter(&self.world) {
-            // Calculate distance from player to entity
-            let entity_pos = vector![transform.position[0], transform.position[1], transform.position[2]];
-            let player_pos_vec = vector![player_position[0], player_position[1], player_position[2]];
-            let distance = (entity_pos - player_pos_vec).magnitude();
-
-            // Include entity if within view distance or if it's the player themselves
-            if distance <= view_distance || (player.is_some() && player.as_ref().unwrap().id == player_id) {
+        for &entity in &aoi_entities {
+            // Get entity components
+            if let Ok((transform, player, pickup, obstacle, power_up, enemy)) = self.world.query::<(
+                &TransformQ,
+                Option<&Player>,
+                Option<&Pickup>,
+                Option<&Obstacle>,
+                Option<&PowerUp>,
+                Option<&Enemy>
+            )>().get(&self.world, entity) {
                 entities.push(EntitySnapshot {
                     id: entity.index(),
                     transform: transform.clone(),
@@ -378,14 +948,20 @@ impl GameWorld {
             }
         }
 
-        let spectators = self.get_spectator_snapshots();
-        GameSnapshot {
+        let base_snapshot = GameSnapshot {
             tick: self.world.resource::<TickCount>().0,
             entities,
             chat_messages: self.get_recent_chat_messages(20),
-            spectators,
-        }
+            spectators: self.get_spectator_snapshots(),
+        };
+
+        // Use delta encoding for this player's snapshot
+        let current_tick = self.world.resource::<TickCount>().0;
+        self.delta_encoder.encode_snapshot(base_snapshot, current_tick)
     }
+
+    /// Update player's AOI tracking (called during snapshot generation) - DEPRECATED
+    /// Use update_player_aoi_grid instead
 
     /// Add a chat message to the game world
     pub fn add_chat_message(&mut self, message: ChatMessage) {
@@ -429,10 +1005,8 @@ impl GameWorld {
     }
 
     fn fixed_update(&mut self) {
-        // Tăng tick count
-        if let Some(mut tick_count) = self.world.get_resource_mut::<TickCount>() {
-            tick_count.0 += 1;
-        }
+        // Tăng tick count (already done in tick() method)
+        // current_tick is incremented in tick() method
 
         // 1. Ingest và validate inputs
         self.ingest_inputs();
@@ -447,13 +1021,21 @@ impl GameWorld {
         // 4. Physics step
         self.physics_step();
 
+        // 4.5. Update spatial grid với vị trí mới sau physics
+        self.update_spatial_grid();
+
         // 5. Gameplay logic (collision detection, etc.)
         self.gameplay_logic();
 
         // 6. Cleanup (lifetime, etc.)
         self.cleanup();
 
-        // 7. Room cleanup
+        // 7. Spatial grid maintenance (every 60 ticks)
+        if self.current_tick % 60 == 0 {
+            self.spatial_grid.cleanup_empty_cells();
+        }
+
+        // 8. Room cleanup
         // Note: RoomManager cleanup is handled separately in RPC service
     }
 
@@ -545,7 +1127,7 @@ impl GameWorld {
             let mut player_query = self.world.query::<(Entity, &TransformQ, &mut Player, &RigidBodyHandle)>();
             let mut pickup_query = self.world.query::<(Entity, &TransformQ, &Pickup, &RigidBodyHandle)>();
 
-            for (player_entity, player_transform, mut player, player_rigid_body) in player_query.iter(&self.world) {
+            for (player_entity, player_transform, player, player_rigid_body) in player_query.iter(&self.world) {
                 for (pickup_entity, pickup_transform, pickup, pickup_rigid_body) in pickup_query.iter(&self.world) {
                     let player_pos = vector![player_transform.position[0], player_transform.position[1], player_transform.position[2]];
                     let pickup_pos = vector![pickup_transform.position[0], pickup_transform.position[1], pickup_transform.position[2]];
@@ -576,7 +1158,7 @@ impl GameWorld {
             let mut player_query = self.world.query::<(Entity, &TransformQ, &mut Player, &RigidBodyHandle)>();
             let mut powerup_query = self.world.query::<(Entity, &TransformQ, &PowerUp, &RigidBodyHandle)>();
 
-            for (player_entity, player_transform, mut player, _player_rigid_body) in player_query.iter(&self.world) {
+            for (player_entity, player_transform, player, _player_rigid_body) in player_query.iter(&self.world) {
                 for (power_up_entity, power_up_transform, power_up, _power_up_rigid_body) in powerup_query.iter(&self.world) {
                     let player_pos = vector![player_transform.position[0], player_transform.position[1], player_transform.position[2]];
                     let power_up_pos = vector![power_up_transform.position[0], power_up_transform.position[1], power_up_transform.position[2]];
@@ -600,7 +1182,7 @@ impl GameWorld {
             let mut player_query = self.world.query::<(Entity, &TransformQ, &mut Player, &RigidBodyHandle)>();
             let mut enemy_query = self.world.query::<(Entity, &TransformQ, &Enemy, &RigidBodyHandle)>();
 
-            for (player_entity, player_transform, mut player, _player_rigid_body) in player_query.iter(&self.world) {
+            for (player_entity, player_transform, player, _player_rigid_body) in player_query.iter(&self.world) {
                 for (_enemy_entity, enemy_transform, enemy, _enemy_rigid_body) in enemy_query.iter(&self.world) {
                     let player_pos = vector![player_transform.position[0], player_transform.position[1], player_transform.position[2]];
                     let enemy_pos = vector![enemy_transform.position[0], enemy_transform.position[1], enemy_transform.position[2]];
@@ -715,7 +1297,7 @@ impl GameWorld {
         // 2. Apply damage từ enemies
         for (player_id, damage) in damage_to_players {
             if let Some(player_entity) = self.world.resource::<PlayerEntityMap>().map.get(&player_id) {
-                if let Some(mut player) = self.world.get_mut::<Player>(*player_entity) {
+                if let Some(player) = self.world.get_mut::<Player>(*player_entity) {
                     // Trong MVP đơn giản, chỉ log damage (có thể thêm health system sau)
                     tracing::debug!("Player {} took {} damage", player_id, damage);
                 }
@@ -740,6 +1322,7 @@ impl GameWorld {
 
         // Despawn collected entities
         for entity in entities_to_despawn {
+            self.spatial_grid.remove_entity(entity);
             self.world.despawn(entity);
         }
 
@@ -760,6 +1343,7 @@ impl GameWorld {
         }
 
         for entity in to_despawn {
+            self.spatial_grid.remove_entity(entity);
             self.world.despawn(entity);
         }
 
@@ -767,6 +1351,33 @@ impl GameWorld {
         let mut lifetime_query = self.world.query::<&mut Lifetime>();
         for mut lifetime in lifetime_query.iter_mut(&mut self.world) {
             lifetime.remaining = lifetime.remaining.saturating_sub(self.tick_rate);
+        }
+    }
+
+    /// Update spatial grid với vị trí hiện tại của tất cả entities
+    fn update_spatial_grid(&mut self) {
+        let mut query = self.world.query::<(Entity, &TransformQ)>();
+        for (entity, transform) in query.iter(&self.world) {
+            // Update position in spatial grid if entity is already tracked
+            if self.spatial_grid.entity_positions.contains_key(&entity) {
+                self.spatial_grid.update_entity_position(entity, transform.position);
+            }
+        }
+    }
+
+    /// Update AOI for specific player
+    fn update_player_aoi_grid(&mut self, player_id: &str) {
+        // Update AOI for specific player
+        if let Some(player_aoi) = self.player_aois.get_mut(player_id) {
+            let current_tick = self.world.resource::<TickCount>().0;
+            if current_tick - player_aoi.last_update_tick >= 10 { // Update every 10 ticks
+                if let Some(player_entity) = self.world.resource::<PlayerEntityMap>().map.get(player_id) {
+                    if let Some(transform) = self.world.get::<TransformQ>(*player_entity) {
+                        player_aoi.visible_cells = self.spatial_grid.get_player_aoi_cells(transform.position);
+                        player_aoi.last_update_tick = current_tick;
+                    }
+                }
+            }
         }
     }
 
@@ -793,7 +1404,7 @@ impl GameWorld {
 
         let spectators = self.get_spectator_snapshots();
         GameSnapshot {
-            tick: self.world.resource::<TickCount>().0,
+            tick: self.current_tick,
             entities,
             chat_messages: self.get_recent_chat_messages(20),
             spectators,
@@ -860,6 +1471,9 @@ impl GameWorld {
             player_map.map.insert(player_id, entity_id);
         }
 
+        // Add to spatial grid
+        self.spatial_grid.add_entity(entity_id, [0.0, 5.0, 0.0]);
+
         entity_id
     }
 
@@ -880,7 +1494,12 @@ impl GameWorld {
             },
         ));
 
-        entity.id()
+        let entity_id = entity.id();
+
+        // Add spectator to spatial grid (they still need to be tracked for AOI)
+        self.spatial_grid.add_entity(entity_id, [0.0, 10.0, 0.0]);
+
+        entity_id
     }
 
     pub fn add_pickup(&mut self, position: [f32; 3], value: u32) -> Entity {
@@ -908,7 +1527,12 @@ impl GameWorld {
             },
         ));
 
-        entity.id()
+        let entity_id = entity.id();
+
+        // Add pickup to spatial grid
+        self.spatial_grid.add_entity(entity_id, position);
+
+        entity_id
     }
 
     pub fn add_obstacle(&mut self, position: [f32; 3], obstacle_type: String) -> Entity {
@@ -942,7 +1566,12 @@ impl GameWorld {
             },
         ));
 
-        entity.id()
+        let entity_id = entity.id();
+
+        // Add obstacle to spatial grid
+        self.spatial_grid.add_entity(entity_id, position);
+
+        entity_id
     }
 
     pub fn add_power_up(&mut self, position: [f32; 3], power_type: String, duration_secs: u64, value: u32) -> Entity {
@@ -974,7 +1603,12 @@ impl GameWorld {
             },
         ));
 
-        entity.id()
+        let entity_id = entity.id();
+
+        // Add power-up to spatial grid
+        self.spatial_grid.add_entity(entity_id, position);
+
+        entity_id
     }
 
     pub fn add_enemy(&mut self, position: [f32; 3], enemy_type: String) -> Entity {
@@ -1023,7 +1657,12 @@ impl GameWorld {
             },
         ));
 
-        entity.id()
+        let entity_id = entity.id();
+
+        // Add enemy to spatial grid
+        self.spatial_grid.add_entity(entity_id, position);
+
+        entity_id
     }
 
     /// Endless Runner specific gameplay logic
@@ -1132,7 +1771,12 @@ impl GameWorld {
             },
         ));
 
-        entity.id()
+        let entity_id = entity.id();
+
+        // Add endless runner pickup to spatial grid
+        self.spatial_grid.add_entity(entity_id, position);
+
+        entity_id
     }
 }
 

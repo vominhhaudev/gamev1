@@ -1,6 +1,9 @@
+pub mod cache;
 pub mod compression;
 pub mod message;
 pub mod metrics;
+pub mod quantization;
 pub mod shutdown;
+pub mod snapshot;
 pub mod telemetry;
 pub mod transport;

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug};
-use crate::{message::Frame, compression::{CompressionConfig, CompressedData}};
+use crate::compression::{CompressionConfig, CompressedData};
 use super::{TransportError, TransportType, MessageType, TransportMessage, ConnectionState, TransportEvent};
 
 /// Enhanced transport trait với support cho multiple channels và monitoring
