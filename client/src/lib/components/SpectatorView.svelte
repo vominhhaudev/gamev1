@@ -366,11 +366,11 @@
     // Spectator info
     ctx.textAlign = 'right';
     ctx.fillStyle = '#9b59b6';
-    ctx.fillText('👁️ SPECTATOR MODE', CANVAS_WIDTH - 20, 30);
+    ctx.fillText('SPECTATOR MODE', CANVAS_WIDTH - 20, 30);
 
     // Connection status
     ctx.fillStyle = $isConnected ? '#2ecc71' : '#e74c3c';
-    ctx.fillText($isConnected ? '🟢 Connected' : '🔴 Disconnected', CANVAS_WIDTH - 20, 50);
+    ctx.fillText($isConnected ? 'Connected' : 'Disconnected', CANVAS_WIDTH - 20, 50);
 
     // Entity count
     ctx.fillStyle = '#ffffff';
@@ -389,7 +389,7 @@
 
 <div class="spectator-container">
   <div class="spectator-header">
-    <h1>👁️ Spectator Mode</h1>
+    <h1>Spectator Mode</h1>
     <div class="spectator-controls">
       <button on:click={exitSpectatorMode} class="exit-btn">
         Exit Spectator Mode
@@ -409,7 +409,7 @@
       {#if $connectionError}
         <div class="connection-error">
           <p>{$connectionError}</p>
-          <button on:click={() => connectionError.set(null)}>×</button>
+          <button on:click={() => connectionError.set(null)}>Close</button>
         </div>
       {/if}
     </div>
@@ -428,13 +428,13 @@
             class="mode-btn {cameraMode === 'follow' ? 'active' : ''}"
             on:click={() => cameraMode = 'follow'}
           >
-            🎯 Follow Player
+            Follow Player
           </button>
           <button
             class="mode-btn {cameraMode === 'overview' ? 'active' : ''}"
             on:click={() => cameraMode = 'overview'}
           >
-            🗺️ Overview
+            Overview
           </button>
           <button
             class="mode-btn {cameraMode === 'fixed' ? 'active' : ''}"
@@ -458,7 +458,7 @@
       </div>
 
       <div class="game-info">
-        <h3>🎮 Game Info</h3>
+        <h3>Game Info</h3>
         <div class="info-item">
           <span class="label">Status:</span>
           <span class="value">{$isConnected ? 'Connected' : 'Disconnected'}</span>

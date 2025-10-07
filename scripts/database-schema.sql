@@ -201,6 +201,17 @@ ALTER TABLE games SET (autovacuum_vacuum_scale_factor = 0.02);
 ALTER TABLE game_sessions SET (autovacuum_vacuum_scale_factor = 0.02);
 ALTER TABLE matchmaking_tickets SET (autovacuum_vacuum_scale_factor = 0.01);
 
+-- Redis Cluster Configuration for 10,000+ CCU
+-- Key patterns for Redis (to be implemented in application code):
+-- Session: session:{token} -> {user_id, expires_at, metadata}
+-- User Profile Cache: user:{id}:profile -> {username, level, stats}
+-- Leaderboard Cache: leaderboard:{season}:top -> sorted set of user scores
+-- Game State Cache: game:{id}:state -> {current_players, status, settings}
+-- Rate Limiting: ratelimit:{ip}:{action} -> counter with TTL
+-- Matchmaking Queue: matchmaking:queue -> list of player tickets
+-- Real-time Updates: pubsub:game:{id} -> publish game events
+-- Distributed Locks: lock:{resource} -> mutex for coordination
+
 -- Grant permissions
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO gamev1_user;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO gamev1_user;

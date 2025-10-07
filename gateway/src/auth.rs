@@ -206,7 +206,7 @@ pub async fn login_handler(
         }
     };
 
-    // Demo credentials validation
+    // Demo credentials validation (for testing)
     if payload.username == "demo@example.com" && payload.password == "password123" {
         let user = User {
             id: "demo-user-id".to_string(),
@@ -247,8 +247,45 @@ pub async fn login_handler(
         }
     }
 
-    // Invalid credentials
-    (StatusCode::UNAUTHORIZED, "Invalid username or password").into_response()
+    // Try to authenticate with PocketBase
+    match authenticate_with_pocketbase(&payload.username, &payload.password).await {
+        Ok(user) => {
+            match auth_service.generate_token(&user) {
+                Ok(access_token) => {
+                    match auth_service.generate_refresh_token(&user) {
+                        Ok(refresh_token) => {
+                            let response = AuthResponse {
+                                access_token,
+                                refresh_token,
+                                token_type: "Bearer".to_string(),
+                                expires_in: ACCESS_TOKEN_EXPIRY * 60,
+                                user: UserInfo {
+                                    id: user.id,
+                                    username: user.username,
+                                    email: user.email,
+                                    role: user.role,
+                                },
+                            };
+
+                            return (StatusCode::OK, Json(response)).into_response();
+                        }
+                        Err(e) => {
+                            error!("Failed to generate refresh token: {}", e);
+                            return (StatusCode::INTERNAL_SERVER_ERROR, "Token generation error").into_response();
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to generate access token: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Token generation error").into_response();
+                }
+            }
+        }
+        Err(e) => {
+            error!("PocketBase authentication failed: {}", e);
+            return (StatusCode::UNAUTHORIZED, "Invalid username or password").into_response();
+        }
+    }
 }
 
 // Register handler
@@ -384,6 +421,67 @@ pub async fn logout_handler(
 ) -> impl IntoResponse {
     // TODO: Implement token blacklisting/invalidation
     (StatusCode::OK, "Logged out successfully").into_response()
+}
+
+// Authenticate user with PocketBase
+async fn authenticate_with_pocketbase(email: &str, password: &str) -> Result<User, Box<dyn std::error::Error>> {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize)]
+    struct AuthRequest {
+        identity: String,
+        password: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct AuthResponse {
+        token: String,
+        record: PocketBaseUser,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct PocketBaseUser {
+        id: String,
+        email: String,
+        username: Option<String>,
+        verified: bool,
+    }
+
+    // Create auth request
+    let auth_payload = AuthRequest {
+        identity: email.to_string(),
+        password: password.to_string(),
+    };
+
+    // Send authentication request to PocketBase
+    let client = reqwest::Client::new();
+    let response = client
+        .post("http://localhost:8090/api/collections/users/auth-with-password")
+        .header("Content-Type", "application/json")
+        .json(&auth_payload)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Authentication failed: {}", response.status()).into());
+    }
+
+    let auth_response: AuthResponse = response.json().await?;
+
+    // TODO: Check if user is verified (temporarily disabled for testing)
+    // if !auth_response.record.verified {
+    //     return Err("User email not verified".into());
+    // }
+
+    // Convert PocketBase user to our User struct
+    let user = User {
+        id: auth_response.record.id,
+        username: auth_response.record.username.unwrap_or_else(|| auth_response.record.email.clone()),
+        email: auth_response.record.email,
+        role: "user".to_string(), // Default role
+    };
+
+    Ok(user)
 }
 
 #[cfg(test)]

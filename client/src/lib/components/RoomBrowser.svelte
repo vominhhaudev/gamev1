@@ -181,7 +181,7 @@
 
 <div class="room-browser">
   <div class="header">
-    <h2>🎮 Game Rooms</h2>
+    <h2>Game Rooms</h2>
     <button class="create-btn" on:click={() => showCreateRoom = !showCreateRoom}>
       {showCreateRoom ? 'Cancel' : 'Create Room'}
     </button>
@@ -190,7 +190,7 @@
   {#if error}
     <div class="error-message">
       {error}
-      <button on:click={() => error = null}>×</button>
+      <button on:click={() => error = null}>Close</button>
     </div>
   {/if}
 
@@ -380,7 +380,7 @@
                   on:click={() => handleJoinRoomAsSpectator(room)}
                   disabled={room.state === 'finished'}
                 >
-                  👁️ Spectate
+                  Spectate
                 </button>
               {/if}
             </div>
@@ -395,8 +395,8 @@
     <div class="leaderboard-modal">
       <div class="leaderboard-content">
         <div class="leaderboard-header">
-          <h3>🏆 Global Leaderboard</h3>
-          <button class="close-btn" on:click={() => showLeaderboard = false}>×</button>
+          <h3>Global Leaderboard</h3>
+          <button class="close-btn" on:click={() => showLeaderboard = false}>Close</button>
         </div>
 
         <div class="leaderboard-filters">

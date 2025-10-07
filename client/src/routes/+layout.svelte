@@ -13,14 +13,13 @@
 </script>
 
 <svelte:head>
-  <title>gamev1 client</title>
+    <title>ENEEGY</title>
 </svelte:head>
 
 <div class="app">
   <header class="app-header">
     <div class="header-left">
-      <h1>gamev1 client</h1>
-      <span class="status">Week 3: Authentication System</span>
+      <h1>ENEEGY</h1>
     </div>
 
     <div class="header-right">

@@ -25,7 +25,7 @@
 
 <div class="rooms-page">
   <div class="header">
-    <h1>🎮 GameV1 Room Browser</h1>
+    <h1>GameV1 Room Browser</h1>
 
     <div class="player-info">
       {#if currentPlayerId}

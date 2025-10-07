@@ -58,7 +58,7 @@
         user = state.user;
         isAuthenticated = state.isAuthenticated;
     });
-
+    
     // Multiplayer integration
     let otherPlayers = [];
     let multiplayerEnabled = false;
@@ -2051,28 +2051,28 @@
                 <div class="auth-status">
                     {#if user}
                         <div class="authenticated">
-                            <p>✅ <strong>Logged in as:</strong> {user.username || user.email}</p>
-                            <p>🎮 <strong>Mode:</strong> Multiplayer Ready!</p>
+                            <p><strong>Logged in as:</strong> {user.username || user.email}</p>
+                            <p><strong>Mode:</strong> Multiplayer Ready!</p>
                             <button class="connect-multiplayer-btn" on:click={connectToMultiplayer}>
-                                🌐 Connect to Multiplayer
+                                Connect to Multiplayer
                             </button>
                         </div>
                     {:else}
                         <div class="not-authenticated">
-                            <p>⚠️ <strong>Guest Mode:</strong> Single-player only</p>
-                            <p>💡 <strong>Login for:</strong> Multiplayer, leaderboards, achievements</p>
+                            <p><strong>Guest Mode:</strong> Single-player only</p>
+                            <p><strong>Login for:</strong> Multiplayer, leaderboards, achievements</p>
                             <button class="quick-login-btn" on:click={handleLogin}>
-                                🚀 Quick Login (Demo)
+                                Quick Login (Demo)
                             </button>
                         </div>
                     {/if}
                 </div>
 
                 <div class="game-info">
-                    <p>✅ <strong>WebGL:</strong> Hardware accelerated 3D graphics</p>
-                    <p>✅ <strong>Audio:</strong> Procedural sound effects</p>
-                    <p>✅ <strong>Controls:</strong> Responsive keyboard input</p>
-                    <p>✅ <strong>Performance:</strong> Adaptive quality & 60 FPS</p>
+                    <p><strong>WebGL:</strong> Hardware accelerated 3D graphics</p>
+                    <p><strong>Audio:</strong> Procedural sound effects</p>
+                    <p><strong>Controls:</strong> Responsive keyboard input</p>
+                    <p><strong>Performance:</strong> Adaptive quality & 60 FPS</p>
                 </div>
 
                 <div class="controls-preview">
@@ -2102,10 +2102,10 @@
     {#if isPaused}
         <div class="pause-overlay">
             <div class="pause-content">
-                <h2>⏸️ Game Paused</h2>
+                <h2>Game Paused</h2>
                 <p>Press <span class="key">P</span> or <span class="key">ESC</span> to resume</p>
-                <button class="resume-btn" on:click={togglePause}>▶️ Resume Game</button>
-                <button class="menu-btn" on:click={resetGame}>🏠 Main Menu</button>
+                <button class="resume-btn" on:click={togglePause}>Resume Game</button>
+                <button class="menu-btn" on:click={resetGame}>Main Menu</button>
             </div>
         </div>
     {/if}
@@ -2120,8 +2120,8 @@
                     <p class="final-speed">Max Speed: <span>{Math.max(1, speed).toFixed(1)}x</span></p>
                 </div>
                 <div class="game-over-actions">
-                    <button class="play-again-btn" on:click={() => { resetGame(); startGame(); }}>🔄 Play Again</button>
-                    <button class="menu-btn" on:click={resetGame}>🏠 Main Menu</button>
+                    <button class="play-again-btn" on:click={() => { resetGame(); startGame(); }}>Play Again</button>
+                    <button class="menu-btn" on:click={resetGame}>Main Menu</button>
                 </div>
             </div>
         </div>
@@ -2168,7 +2168,7 @@
     <div id="game3d-container" class="game3d-container">
         <!-- Fallback content for when WebGL fails -->
         <div class="webgl-fallback" style="display: none;">
-            <h3>⚠️ WebGL Initialization Issue</h3>
+            <h3>WebGL Initialization Issue</h3>
             <p>Your browser may not support WebGL or there was an issue initializing the 3D graphics.</p>
             <p>Please try:</p>
             <ul>

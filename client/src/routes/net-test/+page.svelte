@@ -151,6 +151,156 @@
         <button on:click={() => webrtcActions.getStats().then(stats => console.log('WebRTC Stats:', stats))}>
           Get Connection Stats
         </button>
+        <button on:click={testAllConnections} class="test-btn">
+          Test All Connections
+        </button>
+      </div>
+    </div>
+
+    <div class="connections-overview">
+      <h3>All Project Connections</h3>
+      <div class="connections-grid">
+        <div class="connection-card">
+          <h4>Client Connections</h4>
+          <div class="connection-list">
+            <div class="connection-item">
+              <span class="connection-type">WebSocket</span>
+              <span class="connection-status {isConnected ? 'connected' : 'disconnected'}">
+                {isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+              <span class="connection-endpoint">ws://localhost:8080/ws</span>
+            </div>
+            <div class="connection-item">
+              <span class="connection-type">WebRTC</span>
+              <span class="connection-status {webrtcState?.isConnected ? 'connected' : 'disconnected'}">
+                {webrtcState?.isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+              <span class="connection-endpoint">
+                {webrtcState?.transportType === 'webrtc' ? 'P2P Connection' : 'WebSocket Fallback'}
+              </span>
+            </div>
+            <div class="connection-item">
+              <span class="connection-type">Transport Manager</span>
+              <span class="connection-status {transportState?.isConnected ? 'connected' : 'disconnected'}">
+                {transportState?.isConnected ? 'Connected' : 'Disconnected'}
+              </span>
+              <span class="connection-endpoint">
+                {transportState?.bestTransport ? transportState.bestTransport : 'No active transport'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="connection-card">
+          <h4>Server Connections</h4>
+          <div class="connection-list">
+            <div class="connection-item">
+              <span class="connection-type">Gateway HTTP</span>
+              <span class="connection-status connected">Running</span>
+              <span class="connection-endpoint">http://localhost:8080</span>
+            </div>
+            <div class="connection-item">
+              <span class="connection-type">Worker gRPC</span>
+              <span class="connection-status connected">Running</span>
+              <span class="connection-endpoint">grpc://localhost:50051</span>
+            </div>
+            <div class="connection-card">
+              <h4>Database Connections</h4>
+              <div class="connection-list">
+                <div class="connection-item">
+                  <span class="connection-type">PocketBase</span>
+                  <span class="connection-status connected">Running</span>
+                  <span class="connection-endpoint">http://localhost:8090</span>
+                </div>
+                <div class="connection-item">
+                  <span class="connection-type">PocketBase Data</span>
+                  <span class="connection-status connected">Connected</span>
+                  <span class="connection-endpoint">SQLite Database</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="connection-card">
+          <h4>Network Architecture</h4>
+          <div class="architecture-diagram">
+            <div class="flow-diagram">
+              <div class="node client">
+                <span>Client (Port 5173)</span>
+                <div class="connections">
+                  <div class="conn-line">WebSocket → Gateway</div>
+                  <div class="conn-line">WebRTC → P2P</div>
+                  <div class="conn-line">HTTP → APIs</div>
+                </div>
+              </div>
+              <div class="arrow">↓</div>
+              <div class="node gateway">
+                <span>Gateway (Port 8080)</span>
+                <div class="connections">
+                  <div class="conn-line">gRPC → Worker</div>
+                  <div class="conn-line">HTTP → PocketBase</div>
+                  <div class="conn-line">WebSocket ← Client</div>
+                </div>
+              </div>
+              <div class="arrow">↓</div>
+              <div class="node worker">
+                <span>Worker (Port 50051)</span>
+                <div class="connections">
+                  <div class="conn-line">gRPC ← Gateway</div>
+                  <div class="conn-line">Game Logic</div>
+                </div>
+              </div>
+              <div class="arrow">↓</div>
+              <div class="node database">
+                <span>PocketBase (Port 8090)</span>
+                <div class="connections">
+                  <div class="conn-line">SQLite</div>
+                  <div class="conn-line">User Data</div>
+                  <div class="conn-line">Room Data</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="connection-card">
+          <h4>Connection Statistics</h4>
+          <div class="stats-grid">
+            <div class="stat-item">
+              <span class="stat-label">Active Transports</span>
+              <span class="stat-value">{activeTransportsCount}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">WebRTC Sessions</span>
+              <span class="stat-value">{webrtcState?.sessionId ? 1 : 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Messages Sent</span>
+              <span class="stat-value">{transportState?.totalMessagesSent || 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Messages Received</span>
+              <span class="stat-value">{transportState?.totalMessagesReceived || 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Bytes Sent</span>
+              <span class="stat-value">{transportState?.totalBytesSent || 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Bytes Received</span>
+              <span class="stat-value">{transportState?.totalBytesReceived || 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Errors</span>
+              <span class="stat-value">{transportState?.errorCount || 0}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Reconnections</span>
+              <span class="stat-value">{transportState?.reconnectCount || 0}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -498,6 +648,61 @@
       addMessage('Transport', `Error getting stats: ${error.message}`);
     }
   }
+
+  async function testAllConnections() {
+    addMessage('System', 'Testing all project connections...');
+
+    // Test Gateway HTTP
+    try {
+      const gatewayResponse = await fetch('http://localhost:8080/healthz');
+      if (gatewayResponse.ok) {
+        addMessage('Gateway', '✅ Gateway HTTP is responding');
+      } else {
+        addMessage('Gateway', '❌ Gateway HTTP error: ' + gatewayResponse.status);
+      }
+    } catch (error) {
+      addMessage('Gateway', '❌ Gateway HTTP connection failed: ' + error.message);
+    }
+
+    // Test Worker gRPC (via Gateway)
+    try {
+      const workerResponse = await fetch('http://localhost:8080/version');
+      if (workerResponse.ok) {
+        addMessage('Worker', '✅ Worker gRPC is responding via Gateway');
+      } else {
+        addMessage('Worker', '❌ Worker gRPC error: ' + workerResponse.status);
+      }
+    } catch (error) {
+      addMessage('Worker', '❌ Worker gRPC connection failed: ' + error.message);
+    }
+
+    // Test PocketBase
+    try {
+      const pbResponse = await fetch('http://localhost:8090/api/health');
+      if (pbResponse.ok) {
+        addMessage('PocketBase', '✅ PocketBase is responding');
+      } else {
+        addMessage('PocketBase', '❌ PocketBase error: ' + pbResponse.status);
+      }
+    } catch (error) {
+      addMessage('PocketBase', '❌ PocketBase connection failed: ' + error.message);
+    }
+
+    // Test Leaderboard API
+    try {
+      const lbResponse = await fetch('http://localhost:8080/api/leaderboard');
+      if (lbResponse.ok) {
+        const data = await lbResponse.json();
+        addMessage('Leaderboard', `✅ Leaderboard API responding (${data.total} entries)`);
+      } else {
+        addMessage('Leaderboard', '❌ Leaderboard API error: ' + lbResponse.status);
+      }
+    } catch (error) {
+      addMessage('Leaderboard', '❌ Leaderboard API connection failed: ' + error.message);
+    }
+
+    addMessage('System', 'Connection testing completed');
+  }
 </script>
 
 <style>
@@ -588,6 +793,18 @@
   .controls button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .test-btn {
+    background: linear-gradient(135deg, #10b981, #059669) !important;
+    font-weight: 600;
+    border: 2px solid rgba(16, 185, 129, 0.6) !important;
+  }
+
+  .test-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #059669, #047857) !important;
+    border-color: #10b981 !important;
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
   }
 
   .websocket-section {
@@ -832,6 +1049,162 @@
     color: #f6f8ff;
   }
 
+  .connections-overview {
+    margin: 3rem 0;
+    padding: 2rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    border: 1px solid #253157;
+  }
+
+  .connections-overview h3 {
+    margin: 0 0 2rem 0;
+    color: #f6f8ff;
+    font-size: 1.5rem;
+    text-align: center;
+  }
+
+  .connections-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-bottom: 2rem;
+  }
+
+  .connection-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 1.5rem;
+    border: 1px solid #253157;
+  }
+
+  .connection-card h4 {
+    margin: 0 0 1rem 0;
+    color: #f6f8ff;
+    font-size: 1.1rem;
+    border-bottom: 1px solid #446bff;
+    padding-bottom: 0.5rem;
+  }
+
+  .connection-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .connection-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+  }
+
+  .connection-type {
+    font-weight: 600;
+    color: #90a0d0;
+    min-width: 120px;
+  }
+
+  .connection-status {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    min-width: 80px;
+    text-align: center;
+  }
+
+  .connection-status.connected {
+    background: #1a4d3a;
+    color: #4ade80;
+  }
+
+  .connection-status.disconnected {
+    background: #4d1a1a;
+    color: #f87171;
+  }
+
+  .connection-endpoint {
+    color: #c3ccec;
+    font-family: monospace;
+    font-size: 0.9rem;
+  }
+
+  .architecture-diagram {
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+  }
+
+  .flow-diagram {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .node {
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    padding: 1rem;
+    min-width: 200px;
+    text-align: center;
+  }
+
+  .node span {
+    color: #f6f8ff;
+    font-weight: 600;
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .node .connections {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .conn-line {
+    color: #94a3b8;
+    font-size: 0.8rem;
+    text-align: left;
+  }
+
+  .arrow {
+    color: #446bff;
+    font-size: 1.5rem;
+    font-weight: bold;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+
+  .stat-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+  }
+
+  .stat-label {
+    color: #90a0d0;
+    font-size: 0.9rem;
+  }
+
+  .stat-value {
+    color: #f6f8ff;
+    font-weight: 600;
+    font-family: monospace;
+  }
+
   @media (max-width: 768px) {
     .status-grid {
       grid-template-columns: 1fr;
@@ -843,6 +1216,28 @@
 
     .controls button {
       width: 100%;
+    }
+
+    .connections-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .stats-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .connection-item {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+
+    .connection-type {
+      min-width: auto;
+    }
+
+    .connection-status {
+      min-width: auto;
     }
   }
 </style>

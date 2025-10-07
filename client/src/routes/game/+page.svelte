@@ -62,14 +62,14 @@
 </script>
 
 <svelte:head>
-    <title>🎮 3D Endless Runner - GameV1</title>
+    <title>3D Endless Runner - GameV1</title>
 </svelte:head>
 
 <div class="game-container">
     <!-- Multiplayer status temporarily disabled for single-player mode -->
     <!-- {#if error}
         <div class="connection-error">
-            <p>⚠️ {error}</p>
+            <p>ERROR: {error}</p>
             <button on:click={() => gameService.initializeGrpc()}>
                 Retry Connection
             </button>

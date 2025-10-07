@@ -15,6 +15,7 @@ use tracing::error;
 use metrics::{counter, histogram};
 use tower_http::cors::{Any, CorsLayer};
 use tower::{Layer, Service};
+use tonic::transport::Endpoint;
 
 use common_net::message::{self, ControlMessage, Frame, FramePayload, StateMessage};
 use common_net::transport::{GameTransport, TransportKind, WebRtcTransport};
@@ -556,24 +557,20 @@ pub async fn build_router(worker_endpoint: String) -> Router {
     //     .allow_headers(Any)
     //     .allow_credentials(true);
 
-    // Create worker client
-    let worker_client = match WorkerClient::connect(worker_endpoint.clone()).await {
-        Ok(client) => client,
-        Err(e) => {
-            tracing::warn!("Failed to connect to worker, will retry on demand: {}", e);
-            match WorkerClient::connect(worker_endpoint.clone()).await {
-                Ok(client) => client,
-                Err(_) => {
-                    // Fallback: create a dummy client that will fail on use
-                    match WorkerClient::connect("http://127.0.0.1:1").await {
-                        Ok(client) => client,
-                        Err(_) => {
-                            panic!("Cannot create fallback worker client")
-                        }
-                    }
-                }
-            }
-        }
+    // Create worker client - temporarily disabled for authentication testing
+    // TODO: Re-enable when worker is available
+    let worker_client = {
+        tracing::warn!("Worker client disabled for authentication-only testing");
+        // For now, create a dummy client that will fail on use but allows gateway to run
+        // This is a temporary solution to allow authentication testing
+
+        // Create a non-functional client for testing
+        tracing::warn!("Creating dummy worker client for authentication-only mode");
+        // Use a dummy endpoint that won't work but allows compilation
+        let dummy_endpoint = Endpoint::from_static("http://127.0.0.1:0");
+        // Create a dummy channel that won't actually connect
+        let dummy_channel = dummy_endpoint.connect_lazy();
+        WorkerClient::new(dummy_channel)
     };
 
     let state = AppState {
@@ -592,13 +589,13 @@ pub async fn build_router(worker_endpoint: String) -> Router {
         .route(VERSION_PATH, get(version))
         .route(METRICS_PATH, get(metrics))
         .route(WS_PATH, get(ws_handler))
-        // .route("/auth/login", post(auth_login))
+        .route("/auth/login", post(auth_login))
         // Room management routes (v2 - using Room Manager)
         .route(ROOMS_CREATE_PATH, post(create_room_v2_handler))
         .route(ROOMS_LIST_PATH, get(list_rooms_v2_handler))
         .route(ROOMS_JOIN_PATH, post(join_room_v2_handler))
         .route(ROOMS_ASSIGN_PATH, post(assign_room_v2_handler))
-        // .route("/auth/refresh", post(auth_refresh))
+        .route("/auth/refresh", post(auth_refresh))
         .route("/inputs", post(post_inputs))
         // TODO: Uncomment when axum version conflicts are resolved
         // .route("/rtc/offer", post(handle_rtc_offer))
@@ -607,6 +604,8 @@ pub async fn build_router(worker_endpoint: String) -> Router {
         // .route("/rtc/sessions", get(list_webrtc_sessions))
         // .route("/rtc/sessions/:session_id", delete(close_webrtc_session))
         .route("/test", get(test_handler))
+        .route("/api/leaderboard", get(leaderboard_handler))
+        .route("/api/leaderboard/submit", post(submit_score_handler))
         .route(GAME_JOIN_PATH, post(game_join_handler))
         .route(GAME_LEAVE_PATH, post(game_leave_handler))
         .route(GAME_INPUT_PATH, post(game_input_handler))
@@ -1384,6 +1383,111 @@ async fn send_to_peer(
             eprintln!("Failed to encode WebRTC message: {:?}", e);
         }
     }
+}
+
+// ===== LEADERBOARD HANDLERS =====
+
+// Get leaderboard data
+async fn leaderboard_handler(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&["/api/leaderboard"]).inc();
+
+    let game_mode = params.get("game_mode").map(|s| s.as_str());
+    let time_range = params.get("time_range").map(|s| s.as_str()).unwrap_or("all_time");
+    let limit = params.get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(10);
+
+    // For now, return mock leaderboard data since we don't have PocketBase integration yet
+    // In a real implementation, this would query PocketBase for actual leaderboard data
+    let leaderboard_data = match game_mode {
+        Some("endless_runner") | None => {
+            vec![
+                serde_json::json!({
+                    "rank": 1,
+                    "player_id": "player_001",
+                    "player_name": "Speed Demon",
+                    "score": 15420,
+                    "game_mode": "endless_runner",
+                    "timestamp": chrono::Utc::now().timestamp()
+                }),
+                serde_json::json!({
+                    "rank": 2,
+                    "player_id": "player_002",
+                    "player_name": "Track Master",
+                    "score": 12850,
+                    "game_mode": "endless_runner",
+                    "timestamp": chrono::Utc::now().timestamp()
+                }),
+                serde_json::json!({
+                    "rank": 3,
+                    "player_id": "player_003",
+                    "player_name": "Jump King",
+                    "score": 11200,
+                    "game_mode": "endless_runner",
+                    "timestamp": chrono::Utc::now().timestamp()
+                }),
+            ]
+        }
+        _ => Vec::new(),
+    };
+
+    let response = serde_json::json!({
+        "success": true,
+        "leaderboard": leaderboard_data,
+        "game_mode": game_mode.unwrap_or("all"),
+        "time_range": time_range,
+        "total": leaderboard_data.len()
+    });
+
+    Json(response).into_response()
+}
+
+// Submit score to leaderboard
+async fn submit_score_handler(
+    State(state): State<AppState>,
+    Json(request): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    HTTP_REQUESTS_TOTAL.with_label_values(&["/api/leaderboard/submit"]).inc();
+
+    let player_id = request.get("player_id").and_then(|v| v.as_str()).unwrap_or("anonymous");
+    let player_name = request.get("player_name").and_then(|v| v.as_str()).unwrap_or("Anonymous");
+    let score = request.get("score").and_then(|v| v.as_u64()).unwrap_or(0);
+    let game_mode = request.get("game_mode").and_then(|v| v.as_str()).unwrap_or("endless_runner");
+
+    // Validate inputs
+    if score == 0 {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": "Score must be greater than 0"
+        })).into_response();
+    }
+
+    if player_id.trim().is_empty() {
+        return Json(serde_json::json!({
+            "success": false,
+            "error": "Player ID is required"
+        })).into_response();
+    }
+
+    // For now, just log the score submission since we don't have PocketBase integration yet
+    // In a real implementation, this would save the score to PocketBase
+    tracing::info!(
+        player_id,
+        player_name,
+        score,
+        game_mode,
+        "Score submitted to leaderboard"
+    );
+
+    Json(serde_json::json!({
+        "success": true,
+        "message": "Score submitted successfully",
+        "rank": 1, // Mock rank - in reality would be calculated based on other scores
+        "score": score
+    })).into_response()
 }
 
 pub async fn run(

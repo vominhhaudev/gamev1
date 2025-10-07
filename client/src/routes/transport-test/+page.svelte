@@ -282,51 +282,51 @@
 
 <section class="container">
   <header>
-    <h1>🚀 Transport Test - Phase 1</h1>
+    <h1>Transport Test - Phase 1</h1>
     <p>Testing QUIC/WebTransport, Enhanced WebSocket, and Transport Negotiation</p>
   </header>
 
   <div class="content">
     <!-- Transport Negotiation Section -->
     <div class="test-section">
-      <h2>🔍 Transport Negotiation</h2>
+      <h2>Transport Negotiation</h2>
 
       <div class="capabilities-grid">
         <div class="capability-card">
-          <h3>🌐 Browser Capabilities</h3>
+          <h3>Browser Capabilities</h3>
           {#if browserCapabilities}
             <div class="capabilities">
               <div class="capability-item">
-                <span class="icon">📡</span>
-                <span>WebSocket: {browserCapabilities.websocket ? '✅' : '❌'}</span>
+                <span class="icon">WS</span>
+                <span>WebSocket: {browserCapabilities.websocket ? 'YES' : 'NO'}</span>
               </div>
               <div class="capability-item">
-                <span class="icon">📹</span>
-                <span>WebRTC: {browserCapabilities.webrtc ? '✅' : '❌'}</span>
+                <span class="icon">RTC</span>
+                <span>WebRTC: {browserCapabilities.webrtc ? 'YES' : 'NO'}</span>
               </div>
               <div class="capability-item">
-                <span class="icon">🚀</span>
-                <span>QUIC: {browserCapabilities.quic ? '✅' : '❌'}</span>
+                <span class="icon">QUIC</span>
+                <span>QUIC: {browserCapabilities.quic ? 'YES' : 'NO'}</span>
               </div>
             </div>
           {/if}
         </div>
 
         <div class="capability-card">
-          <h3>🖥️ Server Capabilities</h3>
+          <h3>Server Capabilities</h3>
           {#if serverCapabilities}
             <div class="capabilities">
               <div class="capability-item">
-                <span class="icon">📡</span>
-                <span>WebSocket: {serverCapabilities.websocket ? '✅' : '❌'}</span>
+                <span class="icon">WS</span>
+                <span>WebSocket: {serverCapabilities.websocket ? 'YES' : 'NO'}</span>
               </div>
               <div class="capability-item">
-                <span class="icon">📹</span>
-                <span>WebRTC: {serverCapabilities.webrtc ? '✅' : '❌'}</span>
+                <span class="icon">RTC</span>
+                <span>WebRTC: {serverCapabilities.webrtc ? 'YES' : 'NO'}</span>
               </div>
               <div class="capability-item">
-                <span class="icon">🚀</span>
-                <span>QUIC: {serverCapabilities.quic ? '✅' : '❌'}</span>
+                <span class="icon">QUIC</span>
+                <span>QUIC: {serverCapabilities.quic ? 'YES' : 'NO'}</span>
               </div>
             </div>
           {/if}
@@ -336,26 +336,26 @@
       <div class="controls">
         <button on:click={runTransportNegotiation} disabled={isNegotiating}>
           {#if isNegotiating}
-            🔄 Negotiating...
+            Negotiating...
           {:else}
-            🚀 Run Transport Negotiation
+            Run Transport Negotiation
           {/if}
         </button>
       </div>
 
       {#if negotiationResult}
         <div class="negotiation-results">
-          <h3>📊 Negotiation Results</h3>
+          <h3>Negotiation Results</h3>
 
           {#if negotiationResult.success}
             <div class="success-section">
               <div class="test-results">
-                <h4>🧪 Transport Test Results</h4>
+                <h4>Transport Test Results</h4>
                 {#each testResults as result}
                   <div class="test-result {result.available ? 'available' : 'unavailable'}">
                     <span class="transport-name">{result.transport}</span>
                     <span class="latency">{result.latency}ms</span>
-                    <span class="status">{result.available ? '✅ Available' : '❌ Unavailable'}</span>
+                    <span class="status">{result.available ? 'Available' : 'Unavailable'}</span>
                     {#if result.error}
                       <span class="error">Error: {result.error}</span>
                     {/if}
@@ -364,7 +364,7 @@
               </div>
 
               <div class="selection-result">
-                <h4>🏆 Best Transport Selected</h4>
+                <h4>Best Transport Selected</h4>
                 <div class="selected-transport {selectedTransport}">
                   {selectedTransport}
                 </div>
@@ -372,7 +372,7 @@
             </div>
           {:else}
             <div class="error-section">
-              <p>❌ Negotiation failed: {negotiationResult.error}</p>
+              <p>ERROR: Negotiation failed: {negotiationResult.error}</p>
             </div>
           {/if}
         </div>
@@ -381,24 +381,24 @@
 
     <!-- Enhanced WebSocket Section -->
     <div class="test-section">
-      <h2>📡 Enhanced WebSocket Test</h2>
+      <h2>Enhanced WebSocket Test</h2>
 
       <div class="controls">
         <button on:click={testEnhancedWebSocket} disabled={!!wsConnection}>
-          🔌 Connect Enhanced WebSocket
+          Connect Enhanced WebSocket
         </button>
         <button on:click={disconnectWebSocket} disabled={!wsConnection}>
-          🔌 Disconnect
+          Disconnect
         </button>
         <button on:click={sendTestMessage} disabled={!wsConnection || !wsConnection.isConnected()}>
-          📤 Send Test Message
+          Send Test Message
         </button>
-        <button on:click={clearMessages}>🗑️ Clear Messages</button>
+        <button on:click={clearMessages}>Clear Messages</button>
       </div>
 
       {#if wsStats}
         <div class="websocket-stats">
-          <h3>📊 Connection Stats</h3>
+          <h3>Connection Stats</h3>
           <div class="stats-grid">
             <div class="stat-item">
               <span class="label">Latency:</span>
@@ -446,24 +446,24 @@
 
     <!-- Transport Manager Test Section -->
     <div class="test-section">
-      <h2>🚌 Transport Manager Test</h2>
+      <h2>Transport Manager Test</h2>
 
       <div class="controls">
         <button on:click={testTransportManager} disabled={!!transportManagerState?.isConnected}>
-          🚀 Test Transport Manager
+          Test Transport Manager
         </button>
         <button on:click={cleanupAllTransports}>
-          🧹 Cleanup All Transports
+          Cleanup All Transports
         </button>
       </div>
 
       {#if transportManagerState}
         <div class="transport-manager-stats">
-          <h3>📊 Transport Manager State</h3>
+          <h3>Transport Manager State</h3>
           <div class="stats-grid">
             <div class="stat-item">
               <span class="label">Connected:</span>
-              <span class="value">{transportManagerState.isConnected ? '✅' : '❌'}</span>
+              <span class="value">{transportManagerState.isConnected ? 'YES' : 'NO'}</span>
             </div>
             <div class="stat-item">
               <span class="label">Active Transports:</span>
@@ -515,24 +515,24 @@
 
     <!-- WebTransport Direct Test Section -->
     <div class="test-section">
-      <h2>🚀 WebTransport Direct Test</h2>
+      <h2>WebTransport Direct Test</h2>
 
       <div class="controls">
         <button on:click={testWebTransportDirectly} disabled={!!webTransportClient}>
-          🔗 Connect WebTransport Directly
+          Connect WebTransport Directly
         </button>
         <button on:click={cleanupAllTransports}>
-          🧹 Cleanup All Transports
+          Cleanup All Transports
         </button>
       </div>
 
       {#if webTransportStats}
         <div class="webtransport-stats">
-          <h3>📊 WebTransport Stats</h3>
+          <h3>WebTransport Stats</h3>
           <div class="stats-grid">
             <div class="stat-item">
               <span class="label">Connected:</span>
-              <span class="value">{webTransportStats.connected ? '✅' : '❌'}</span>
+              <span class="value">{webTransportStats.connected ? 'YES' : 'NO'}</span>
             </div>
             <div class="stat-item">
               <span class="label">Type:</span>

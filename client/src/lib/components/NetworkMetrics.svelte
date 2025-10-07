@@ -116,9 +116,9 @@
 
 <div class="network-metrics" class:visible={isVisible}>
   <div class="metrics-header">
-    <h3>📊 Network Metrics</h3>
+    <h3>Network Metrics</h3>
     <button class="toggle-btn" on:click={toggleVisibility}>
-      {isVisible ? '👁️' : '📊'}
+      {isVisible ? 'HIDE' : 'SHOW'}
     </button>
   </div>
 
@@ -149,7 +149,7 @@
 
       <!-- Bandwidth -->
       <div class="metrics-section">
-        <h4>📡 Bandwidth</h4>
+        <h4>Bandwidth</h4>
         <div class="metric-item">
           <span class="metric-label">Upload:</span>
           <span class="metric-value">{formatBandwidth(metrics.bandwidth.upload)}</span>
@@ -162,10 +162,10 @@
 
       <!-- Compression -->
       <div class="metrics-section">
-        <h4>🗜️ Compression</h4>
+        <h4>Compression</h4>
         <div class="metric-item">
           <span class="metric-label">Enabled:</span>
-          <span class="metric-value">{metrics.compression.enabled ? '✅ Yes' : '❌ No'}</span>
+          <span class="metric-value">{metrics.compression.enabled ? 'YES Yes' : 'NO No'}</span>
         </div>
         {#if metrics.compression.enabled}
           <div class="metric-item">
@@ -193,7 +193,7 @@
 
       <!-- WebSocket Stats -->
       <div class="metrics-section">
-        <h4>🔌 WebSocket</h4>
+        <h4>WebSocket</h4>
         <div class="metric-item">
           <span class="metric-label">Sent:</span>
           <span class="metric-value">{metrics.websocket.messagesSent} msgs</span>

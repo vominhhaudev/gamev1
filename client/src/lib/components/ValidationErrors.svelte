@@ -8,7 +8,7 @@
 {#if hasErrors}
   <div class="validation-errors">
     <div class="error-header">
-      <span class="error-icon">⚠️</span>
+      <span class="error-icon">ERROR</span>
       <strong>{title}</strong>
     </div>
     <ul class="error-list">
